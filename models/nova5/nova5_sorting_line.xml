@@ -1,0 +1,311 @@
+<mujoco model="nova5_dual_arm_sorting_line">
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
+
+  <visual>
+    <global azimuth="140" elevation="-28"/>
+    <map force="0.1" znear="0.01"/>
+    <headlight ambient="0.38 0.38 0.38" diffuse="0.72 0.72 0.72" specular="0.12 0.12 0.12"/>
+  </visual>
+
+  <default>
+    <joint damping="2.0" armature="0.02" frictionloss="0.02"/>
+    <geom contype="0" conaffinity="0" density="0"/>
+    <site type="box" rgba="0.1 0.45 0.9 0.8"/>
+  </default>
+
+  <asset>
+    <material name="floor_mat" rgba="0.20 0.22 0.21 1"/>
+    <material name="rail_mat" rgba="0.82 0.84 0.82 1"/>
+    <material name="station_mat" rgba="0.10 0.13 0.16 1"/>
+    <material name="tray_mat" rgba="0.28 0.30 0.31 1"/>
+    <material name="slot_mat" rgba="0.95 0.96 0.92 1"/>
+    <material name="part_blue" rgba="0.20 0.55 0.95 1"/>
+    <material name="part_green" rgba="0.20 0.78 0.42 1"/>
+    <material name="part_yellow" rgba="0.95 0.78 0.22 1"/>
+    <material name="part_orange" rgba="0.96 0.38 0.12 1"/>
+    <material name="part_white" rgba="0.92 0.94 0.95 1"/>
+    <material name="gripper_mat" rgba="0.16 0.18 0.20 1"/>
+    <material name="finger_mat" rgba="0.88 0.90 0.86 1"/>
+    <material name="belt_mat" rgba="0.07 0.08 0.09 1"/>
+    <material name="guard_mat" rgba="0.95 0.72 0.08 0.32"/>
+    <material name="reject_mat" rgba="0.82 0.20 0.16 1"/>
+    <material name="finished_mat" rgba="0.20 0.68 0.42 1"/>
+    <material name="sensor_mat" rgba="0.10 0.92 0.78 0.85"/>
+
+    <mesh name="base_link" content_type="model/stl" file="../meshes/nova5/base_link.STL"/>
+    <mesh name="Link1" content_type="model/stl" file="../meshes/nova5/Link1.STL"/>
+    <mesh name="Link2" content_type="model/stl" file="../meshes/nova5/Link2.STL"/>
+    <mesh name="Link3" content_type="model/stl" file="../meshes/nova5/Link3.STL"/>
+    <mesh name="Link4" content_type="model/stl" file="../meshes/nova5/Link4.STL"/>
+    <mesh name="Link5" content_type="model/stl" file="../meshes/nova5/Link5.STL"/>
+    <mesh name="Link6" content_type="model/stl" file="../meshes/nova5/Link6.STL"/>
+  </asset>
+
+  <worldbody>
+    <light name="top_light" pos="0 -0.4 3.0" dir="0 0 -1"/>
+    <light name="infeed_light" pos="0 1.2 1.4" dir="0 -1 -0.6"/>
+
+    <geom name="floor" type="plane" pos="0 0 -0.002" size="2.0 3.0 0.02" material="floor_mat" contype="1" conaffinity="1"/>
+
+    <!-- Upstream feeder. Parts enter the long conveyor from this end. -->
+    <body name="sloped_outlet" pos="0 2.12 0.35">
+      <geom name="outlet_ramp" type="box" size="0.28 0.30 0.018" euler="0.28 0 0" material="rail_mat" contype="1" conaffinity="1" friction="0.10 0.01 0.001"/>
+      <geom name="outlet_left_rail" type="box" pos="-0.30 0 0.035" size="0.018 0.31 0.035" euler="0.28 0 0" material="rail_mat"/>
+      <geom name="outlet_right_rail" type="box" pos="0.30 0 0.035" size="0.018 0.31 0.035" euler="0.28 0 0" material="rail_mat"/>
+    </body>
+
+    <!-- An eight-segment, physics-driven conveyor. Python moves each segment
+         downstream; contact friction carries free objects without teleporting them. -->
+    <body name="conveyor_frame" pos="0 0.10 0">
+      <geom name="conveyor_safety_underlay" type="box" pos="0 0 0.022" size="0.345 2.53 0.022" material="belt_mat" contype="1" conaffinity="1" friction="0.8 0.02 0.001"/>
+      <geom name="conveyor_left_guard" type="box" pos="-0.365 0 0.105" size="0.018 2.62 0.105" material="guard_mat" contype="1" conaffinity="1"/>
+      <geom name="conveyor_right_guard" type="box" pos="0.365 0 0.105" size="0.018 2.62 0.105" material="guard_mat" contype="1" conaffinity="1"/>
+      <site name="vision_pick_window" pos="0 0 0.135" size="0.32 1.85 0.003" rgba="0 0 0 0"/>
+      <site name="infeed_part_present" pos="0 2.15 0.135" size="0.28 0.08 0.004" rgba="0 0 0 0"/>
+      <site name="tail_exit_sensor" pos="0 -2.35 0.135" size="0.28 0.08 0.004" rgba="0 0 0 0"/>
+    </body>
+    <body name="belt_segment_01" pos="0 0 0.075">
+      <joint name="belt_segment_01_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_01_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_02" pos="0 0 0.075">
+      <joint name="belt_segment_02_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_02_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_03" pos="0 0 0.075">
+      <joint name="belt_segment_03_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_03_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_04" pos="0 0 0.075">
+      <joint name="belt_segment_04_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_04_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_05" pos="0 0 0.075">
+      <joint name="belt_segment_05_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_05_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_06" pos="0 0 0.075">
+      <joint name="belt_segment_06_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_06_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_07" pos="0 0 0.075">
+      <joint name="belt_segment_07_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_07_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+    <body name="belt_segment_08" pos="0 0 0.075">
+      <joint name="belt_segment_08_slide" type="slide" axis="0 1 0" limited="false"/>
+      <geom name="belt_segment_08_geom" type="box" size="0.34 0.37 0.025" material="belt_mat" mass="3" contype="2" conaffinity="1" friction="1.4 0.02 0.001"/>
+    </body>
+
+    <!-- Physical end states: rejected parts and a finished output bin. -->
+
+    <camera name="overhead_inspection_camera" pos="0 0.92 2.65" xyaxes="1 0 0 0 0.91 0.41" fovy="52"/>
+    <camera name="line_overview_camera" pos="0 -2.10 1.85" xyaxes="1 0 0 0 0.66 0.75" fovy="52"/>
+
+    <body name="part_01" pos="-0.42 0.83 0.065">
+      <freejoint/>
+      <geom type="box" size="0.025 0.025 0.018" material="part_blue" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_02" pos="-0.15 0.92 0.065">
+      <freejoint/>
+      <geom type="box" size="0.023 0.023 0.02" material="part_green" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_03" pos="0.36 0.87 0.065">
+      <freejoint/>
+      <geom type="box" size="0.024 0.024 0.017" material="part_yellow" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_04" pos="0.12 0.56 0.065">
+      <freejoint/>
+      <geom type="box" size="0.024 0.024 0.018" material="part_blue" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_05" pos="-0.48 0.33 0.065">
+      <freejoint/>
+      <geom type="box" size="0.026 0.026 0.017" material="part_green" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_06" pos="0.45 0.29 0.065">
+      <freejoint/>
+      <geom type="box" size="0.025 0.025 0.018" material="part_yellow" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_07" pos="-0.60 0.78 0.060">
+      <freejoint/>
+      <geom type="cylinder" size="0.026 0.020" material="part_orange" mass="0.030" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_08" pos="0.58 0.73 0.074">
+      <freejoint/>
+      <geom type="capsule" size="0.021 0.032" material="part_white" mass="0.028" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_09" pos="-0.32 0.49 0.062">
+      <freejoint/>
+      <geom type="box" size="0.032 0.020 0.016" material="part_blue" mass="0.032" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_10" pos="0.38 0.46 0.060">
+      <freejoint/>
+      <geom type="cylinder" size="0.024 0.019" material="part_green" mass="0.029" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_11" pos="-0.05 0.25 0.070">
+      <freejoint/>
+      <geom type="capsule" size="0.020 0.029" material="part_yellow" mass="0.027" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_12" pos="0.28 0.18 0.064">
+      <freejoint/>
+      <geom type="box" size="0.028 0.024 0.017" material="part_orange" mass="0.034" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_13" pos="-0.10 1.80 0.062">
+      <freejoint/>
+      <geom type="box" size="0.025 0.025 0.018" material="part_white" mass="0.035" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+    <body name="part_14" pos="0.12 1.45 0.060">
+      <freejoint/>
+      <geom type="cylinder" size="0.023 0.018" material="part_blue" mass="0.029" contype="1" conaffinity="1" friction="0.10 0.02 0.001"/>
+    </body>
+
+    <!-- Robot A station. -->
+    <body name="robot_A_base" pos="-0.52 -0.08 0">
+      <geom name="robot_A_station_plate" type="box" pos="0 0 -0.001" size="0.30 0.30 0.012" material="station_mat" contype="1" conaffinity="1"/>
+      <site name="robot_A_label" pos="0 -0.36 0.02" size="0.11 0.015 0.003" rgba="0.2 0.55 1 1"/>
+      <geom name="A_base_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
+      <body name="A_Link1" pos="0 0 0.24">
+        <inertial pos="9.18643e-06 -0.0217708 -0.0261834" quat="0.684555 0.177181 -0.176991 0.684592" mass="1.08091" diaginertia="0.00284011 0.00265963 0.00128069"/>
+        <joint name="A_joint1" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="3.0" armature="0.03"/>
+        <geom name="A_Link1_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link1"/>
+        <body name="A_Link2" quat="-0.491193 -0.49119 -0.508657 0.508654">
+          <inertial pos="-0.199338 -0.00696463 0.109209" quat="-0.0124484 0.700654 0.0122458 0.713287" mass="2.54585" diaginertia="0.0643202 0.0637511 0.00275793"/>
+          <joint name="A_joint2" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" limited="true" damping="4.0" armature="0.04"/>
+          <geom name="A_Link2_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link2"/>
+          <body name="A_Link3" pos="-0.399756 -0.013969 0">
+            <inertial pos="-0.152357 -0.00535717 0.0198992" quat="-0.0125445 0.707695 0.0121512 0.706302" mass="1.40746" diaginertia="0.0235997 0.0232013 0.00098083"/>
+            <joint name="A_joint3" pos="0 0 0" axis="0 0 1" range="-2.79 2.79" limited="true" damping="3.0" armature="0.03"/>
+            <geom name="A_Link3_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link3"/>
+            <body name="A_Link4" pos="-0.329799 -0.0115244 0.135" quat="0.719348 0 0 -0.69465">
+              <inertial pos="-6.37112e-06 -0.022759 -0.0202382" quat="0.648587 0.282308 -0.28212 0.648109" mass="0.439666" diaginertia="0.000676686 0.000634739 0.000253769"/>
+              <joint name="A_joint4" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+              <geom name="A_Link4_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link4"/>
+              <body name="A_Link5" pos="0 -0.12 0" quat="0.707105 0.707108 0 0">
+                <inertial pos="-1.27926e-06 0.00190912 -0.00761119" quat="0.393821 0.587386 -0.587227 0.39376" mass="0.574835" diaginertia="0.00069052 0.000663177 0.000348157"/>
+                <joint name="A_joint5" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+                <geom name="A_Link5_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link5"/>
+                <body name="A_Link6" pos="0 0.088328 0" quat="0.707105 -0.707108 0 0">
+                  <inertial pos="1.54762e-06 0.000151599 -0.0194592" quat="0.000736825 0.707106 0.000566044 0.707107" mass="0.12968" diaginertia="7.78631e-05 5.054e-05 5.02803e-05"/>
+                  <joint name="A_joint6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="1.5" armature="0.015"/>
+                  <geom name="A_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6"/>
+                  <site name="A_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
+                  <body name="A_gripper" pos="0 0 -0.09">
+                    <geom name="A_gripper_palm" type="box" size="0.075 0.028 0.014" material="gripper_mat" contype="1" conaffinity="1" mass="0.08"/>
+                    <geom name="A_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="1" conaffinity="1" mass="0.04"/>
+                    <body name="A_left_finger" pos="-0.045 0 -0.055">
+                      <joint name="A_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
+                      <geom name="A_left_finger_pad" type="box" size="0.012 0.021 0.055" material="finger_mat" contype="1" conaffinity="1" mass="0.025" friction="1.2 0.02 0.001"/>
+                    </body>
+                    <body name="A_right_finger" pos="0.045 0 -0.055">
+                      <joint name="A_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
+                      <geom name="A_right_finger_pad" type="box" size="0.012 0.021 0.055" material="finger_mat" contype="1" conaffinity="1" mass="0.025" friction="1.2 0.02 0.001"/>
+                    </body>
+                    <site name="A_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
+                    <site name="A_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- Robot B station. -->
+    <body name="robot_B_base" pos="0.52 -0.08 0">
+      <geom name="robot_B_station_plate" type="box" pos="0 0 -0.001" size="0.30 0.30 0.012" material="station_mat" contype="1" conaffinity="1"/>
+      <site name="robot_B_label" pos="0 -0.36 0.02" size="0.11 0.015 0.003" rgba="0.95 0.55 0.2 1"/>
+      <geom name="B_base_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
+      <body name="B_Link1" pos="0 0 0.24">
+        <inertial pos="9.18643e-06 -0.0217708 -0.0261834" quat="0.684555 0.177181 -0.176991 0.684592" mass="1.08091" diaginertia="0.00284011 0.00265963 0.00128069"/>
+        <joint name="B_joint1" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="3.0" armature="0.03"/>
+        <geom name="B_Link1_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link1"/>
+        <body name="B_Link2" quat="-0.491193 -0.49119 -0.508657 0.508654">
+          <inertial pos="-0.199338 -0.00696463 0.109209" quat="-0.0124484 0.700654 0.0122458 0.713287" mass="2.54585" diaginertia="0.0643202 0.0637511 0.00275793"/>
+          <joint name="B_joint2" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" limited="true" damping="4.0" armature="0.04"/>
+          <geom name="B_Link2_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link2"/>
+          <body name="B_Link3" pos="-0.399756 -0.013969 0">
+            <inertial pos="-0.152357 -0.00535717 0.0198992" quat="-0.0125445 0.707695 0.0121512 0.706302" mass="1.40746" diaginertia="0.0235997 0.0232013 0.00098083"/>
+            <joint name="B_joint3" pos="0 0 0" axis="0 0 1" range="-2.79 2.79" limited="true" damping="3.0" armature="0.03"/>
+            <geom name="B_Link3_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link3"/>
+            <body name="B_Link4" pos="-0.329799 -0.0115244 0.135" quat="0.719348 0 0 -0.69465">
+              <inertial pos="-6.37112e-06 -0.022759 -0.0202382" quat="0.648587 0.282308 -0.28212 0.648109" mass="0.439666" diaginertia="0.000676686 0.000634739 0.000253769"/>
+              <joint name="B_joint4" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+              <geom name="B_Link4_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link4"/>
+              <body name="B_Link5" pos="0 -0.12 0" quat="0.707105 0.707108 0 0">
+                <inertial pos="-1.27926e-06 0.00190912 -0.00761119" quat="0.393821 0.587386 -0.587227 0.39376" mass="0.574835" diaginertia="0.00069052 0.000663177 0.000348157"/>
+                <joint name="B_joint5" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+                <geom name="B_Link5_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link5"/>
+                <body name="B_Link6" pos="0 0.088328 0" quat="0.707105 -0.707108 0 0">
+                  <inertial pos="1.54762e-06 0.000151599 -0.0194592" quat="0.000736825 0.707106 0.000566044 0.707107" mass="0.12968" diaginertia="7.78631e-05 5.054e-05 5.02803e-05"/>
+                  <joint name="B_joint6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="1.5" armature="0.015"/>
+                  <geom name="B_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6"/>
+                  <site name="B_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
+                  <body name="B_gripper" pos="0 0 -0.09">
+                    <geom name="B_gripper_palm" type="box" size="0.075 0.028 0.014" material="gripper_mat" contype="1" conaffinity="1" mass="0.08"/>
+                    <geom name="B_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="1" conaffinity="1" mass="0.04"/>
+                    <body name="B_left_finger" pos="-0.045 0 -0.055">
+                      <joint name="B_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
+                      <geom name="B_left_finger_pad" type="box" size="0.012 0.021 0.055" material="finger_mat" contype="1" conaffinity="1" mass="0.025" friction="1.2 0.02 0.001"/>
+                    </body>
+                    <body name="B_right_finger" pos="0.045 0 -0.055">
+                      <joint name="B_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
+                      <geom name="B_right_finger_pad" type="box" size="0.012 0.021 0.055" material="finger_mat" contype="1" conaffinity="1" mass="0.025" friction="1.2 0.02 0.001"/>
+                    </body>
+                    <site name="B_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
+                    <site name="B_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- Lower 10x10 placement area. -->
+  </worldbody>
+
+  <contact>
+    <!-- The underlay catches parts at seams but must not collide with belt plates. -->
+    <exclude body1="conveyor_frame" body2="belt_segment_01"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_02"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_03"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_04"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_05"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_06"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_07"/>
+    <exclude body1="conveyor_frame" body2="belt_segment_08"/>
+  </contact>
+
+  <actuator>
+    <position name="A_joint1_position" joint="A_joint1" kp="120" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
+    <position name="A_joint2_position" joint="A_joint2" kp="160" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-120 120"/>
+    <position name="A_joint3_position" joint="A_joint3" kp="130" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-90 90"/>
+    <position name="A_joint4_position" joint="A_joint4" kp="80" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="A_joint5_position" joint="A_joint5" kp="70" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-40 40"/>
+    <position name="A_joint6_position" joint="A_joint6" kp="45" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-25 25"/>
+    <position name="A_left_finger_position" joint="A_left_finger_slide" kp="250" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-30 30"/>
+    <position name="A_right_finger_position" joint="A_right_finger_slide" kp="250" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-30 30"/>
+
+    <position name="B_joint1_position" joint="B_joint1" kp="120" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
+    <position name="B_joint2_position" joint="B_joint2" kp="160" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-120 120"/>
+    <position name="B_joint3_position" joint="B_joint3" kp="130" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-90 90"/>
+    <position name="B_joint4_position" joint="B_joint4" kp="80" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="B_joint5_position" joint="B_joint5" kp="70" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-40 40"/>
+    <position name="B_joint6_position" joint="B_joint6" kp="45" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-25 25"/>
+    <position name="B_left_finger_position" joint="B_left_finger_slide" kp="250" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-30 30"/>
+    <position name="B_right_finger_position" joint="B_right_finger_slide" kp="250" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-30 30"/>
+  </actuator>
+
+  <sensor>
+    <framepos name="A_tool_position" objtype="site" objname="A_tool0"/>
+    <framequat name="A_tool_orientation" objtype="site" objname="A_tool0"/>
+    <framepos name="B_tool_position" objtype="site" objname="B_tool0"/>
+    <framequat name="B_tool_orientation" objtype="site" objname="B_tool0"/>
+    <framepos name="infeed_present_position" objtype="site" objname="infeed_part_present"/>
+    <framepos name="pick_window_position" objtype="site" objname="vision_pick_window"/>
+  </sensor>
+</mujoco>

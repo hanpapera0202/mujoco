@@ -1,79 +1,29 @@
-# MuJoCo Starter Project
+# Nova5 Dual-Arm Sorting Research
 
-這是一個適用於 Windows 與 MuJoCo 3.11.0 的入門專案，包含：
+此 repo 是 Nova5 雙手臂皮帶分揀的 MuJoCo 研究平台。研究重點是集中式、Deadline-aware 的雙手臂任務分配與共享工作區時空預約。
 
-- 可直接載入的 MJCF 場景
-- Python 控制範例
-- Windows 一鍵啟動腳本
-- 基本安裝與執行說明
+## 快速開始
 
-## 1. 下載專案
-
-```bat
-git clone https://github.com/hanpapera0202/mujoco.git
-cd mujoco
-```
-
-## 2. 使用 MuJoCo `simulate.exe` 執行
-
-先確認 MuJoCo 已解壓縮，例如：
-
-```text
-C:\mujoco\mujoco-3.11.0-windows-x86_64
-```
-
-若路徑不同，請修改 `run_windows.bat` 內的 `MUJOCO_HOME`。
-
-雙擊：
-
-```text
-run_windows.bat
-```
-
-或在命令提示字元執行：
-
-```bat
-run_windows.bat
-```
-
-## 3. 使用 Python 執行
-
-建立虛擬環境：
-
-```bat
+```powershell
 py -m venv .venv
 .venv\Scripts\activate
-python -m pip install --upgrade pip
 pip install -r requirements.txt
+python src\run_sorting_line.py
 ```
 
-執行：
-
-```bat
-python src\run_simulation.py
-```
-
-## 4. 專案結構
+## 專案結構
 
 ```text
-mujoco/
-├─ models/
-│  └─ falling_box.xml
-├─ src/
-│  └─ run_simulation.py
-├─ .gitignore
-├─ requirements.txt
-├─ run_windows.bat
-└─ README.md
+models/nova5/       MuJoCo 產線場景
+models/meshes/      Nova5 STL meshes
+configs/            皮帶與投料設定
+src/run_sorting_line.py
+                    物理皮帶與隨機斜坡投料控制器
+src/central_coordinator.py
+                    集中式快篩、全域派工與時空 reservation
+docs/               演算法設計文件
 ```
 
-## 5. 操作方式
+## 目前架構
 
-模型載入後：
-
-- 按 `Space`：開始或暫停模擬
-- 滑鼠左鍵拖曳：旋轉視角
-- 滑鼠右鍵拖曳：平移視角
-- 滾輪：縮放
-
-場景包含一個地面與一個可自由落下的紅色方塊，可作為後續雙臂機器人、工料搬運與碰撞測試的基礎。
+協調器先排除 Deadline 已失效、不可達、忙碌或無抓取候選的 arm-object pair；其後以抓取成功率、Deadline 與移動成本排序，並為完整共享碰撞空間建立 `zone + time interval` reservation。A、B 可同時動作，只有時空區間衝突時才讓其中一方等待或重規劃。

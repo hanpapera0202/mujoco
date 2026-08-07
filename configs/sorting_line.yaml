@@ -1,0 +1,38 @@
+scene:
+  name: nova5_dual_arm_sorting_line
+  mjcf_path: models/nova5/nova5_sorting_line.xml
+  runner: src/run_sorting_line.py
+
+conveyor:
+  direction: negative_y
+  physical_model: eight_kinematic_belt_segments_with_contact_friction
+  segment_count: 8
+  segment_length_m: 0.74
+  active_loop_length_m: 5.18
+  segment_overlap_m: 0.0925
+  belt_speed_mps: 0.18
+  upstream_spawn_y_range_m: [2.20, 2.32]
+  upstream_spawn_z_m: 0.49
+  tail_exit_y_m: -2.25
+  part_spawn_interval_s: 1.0
+  feeder_clear_y_m: 1.60
+  max_active_parts: 8
+
+workpieces:
+  names: [part_01, part_02, part_03, part_04, part_05, part_06, part_07, part_08, part_09, part_10, part_11, part_12, part_13, part_14]
+  spawn_x_range_m: [-0.20, 0.20]
+  random_yaw: true
+  recycle_after_tail_exit: true
+
+sorting_cells:
+  robot_A:
+    side: left
+    primary_conveyor_x_range: [-0.34, 0.0]
+  robot_B:
+    side: right
+    primary_conveyor_x_range: [0.0, 0.34]
+
+control_contract:
+  perception: [part_id, class, pose_xyzquat, confidence]
+  action_order: [detect, reserve_robot, approach, grasp, verify_grasp, place, verify_place]
+  safety: [estop, workspace_reservation, tail_exit_monitor]
