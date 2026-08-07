@@ -81,8 +81,10 @@ class ArmMission:
     object_id: str
     placement_zone: str
     keyframes: list[tuple[str, float, np.ndarray, float]]
+    intercept_close_s: float
     keyframe_index: int = 0
     keyframe_started_s: float = 0.0
+    next_replan_s: float = 0.0
     grasped: bool = False
     failed: bool = False
 
@@ -204,6 +206,7 @@ class SortingDemo:
         self.items = make_demo_items(self.seed)
         self.by_name = {item.part_name: item for item in self.items}
         self.qpos_addresses = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
+        self.part_dof_addresses = {name: joint_dof_address(self.model, name) for name in PART_NAMES}
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
@@ -382,7 +385,8 @@ class SortingDemo:
                 self.missed.add(name)
                 self._log("missed", object_id=name, reason="tail_exit")
                 continue
-            remaining = min(item.deadline_s, max(0.1, (xyz[1] - TAIL_EXIT_Y_M) / self.parameters.belt_speed_mps))
+            downstream_speed = max(0.03, -float(self.data.qvel[self.part_dof_addresses[name] + 1]))
+            remaining = min(item.deadline_s, max(0.1, (xyz[1] - TAIL_EXIT_Y_M) / downstream_speed))
             observations.append(ObjectObservation(name, item.object_class, tuple(xyz), remaining, {ArmId.A: 0.93, ArmId.B: 0.93}))
         return observations
 
@@ -391,14 +395,19 @@ class SortingDemo:
             assignment.object_id == object_id for assignment in self.deferred_assignments.values()
         )
 
+    def _predict_part_position(self, object_id: str, horizon_s: float) -> np.ndarray:
+        """Predict interception from MuJoCo's current free-body velocity."""
+        xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3].copy()
+        velocity = self.data.qvel[self.part_dof_addresses[object_id] : self.part_dof_addresses[object_id] + 3].copy()
+        if abs(velocity[1]) < 0.03:
+            velocity[1] = -self.parameters.belt_speed_mps
+        return xyz + velocity * max(0.0, horizon_s)
+
     def _plan_mission(self, arm: ArmId, object_id: str, placement_zone: str) -> ArmMission:
         kin = self.kinematics[arm]
-        qpos_address = self.qpos_addresses[object_id]
-        pick_xyz = self.data.qpos[qpos_address : qpos_address + 3].copy()
-        # The part continues moving while the arm approaches, descends, and closes.
-        # Aim at this predicted belt position instead of the stale observation.
         time_to_close_s = 1.15 + 0.70 + 0.40
-        pick_xyz[1] -= self.parameters.belt_speed_mps * time_to_close_s
+        intercept_close_s = self.data.time + time_to_close_s
+        pick_xyz = self._predict_part_position(object_id, time_to_close_s)
         pick_xyz[2] = PICK_HEIGHT_M
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
@@ -432,8 +441,27 @@ class SortingDemo:
                 ("retreat", 0.65, q_bin_approach, 0.035),
                 ("home", 1.00, q_home, 0.035),
             ],
+            intercept_close_s,
             keyframe_started_s=self.data.time,
+            next_replan_s=self.data.time + 0.12,
         )
+
+    def _refresh_intercept(self, mission: ArmMission) -> None:
+        if mission.failed or self.data.time < mission.next_replan_s or mission.keyframe_index > 1:
+            return
+        kin = self.kinematics[mission.arm]
+        pick_xyz = self._predict_part_position(mission.object_id, mission.intercept_close_s - self.data.time)
+        pick_xyz[2] = PICK_HEIGHT_M
+        pregrasp = pick_xyz.copy()
+        pregrasp[2] = PREGRASP_HEIGHT_M
+        start = self.data.qpos[kin.qpos_addresses].copy()
+        q_pregrasp = kin.solve_position_ik(pregrasp, start)
+        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp)
+        mission.keyframes[0] = ("approach", 1.15, q_pregrasp, 0.035)
+        mission.keyframes[1] = ("descend", 0.70, q_pick, 0.035)
+        mission.keyframes[2] = ("close", 0.40, q_pick, 0.0)
+        mission.keyframes[3] = ("lift", 0.70, q_pregrasp, 0.0)
+        mission.next_replan_s = self.data.time + 0.12
 
     def _schedule(self) -> None:
         if self.data.time - self.last_schedule_s < SCHEDULER_PERIOD_S:
@@ -494,6 +522,7 @@ class SortingDemo:
     def _update_missions(self) -> None:
         for arm, mission in list(self.missions.items()):
             kin = self.kinematics[arm]
+            self._refresh_intercept(mission)
             stage, duration, target, opening = mission.keyframes[mission.keyframe_index]
             elapsed = self.data.time - mission.keyframe_started_s
             current = self.data.qpos[kin.qpos_addresses].copy()
