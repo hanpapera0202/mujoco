@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,7 +152,13 @@ class SortingDemo:
         self.model.opt.timestep = CONTROL_STEP_S
         self.data = mujoco.MjData(self.model)
         self.seed = seed
-        self.items = make_demo_items(seed)
+        self.reset_requested = threading.Event()
+        self._reset_state()
+
+    def _reset_state(self) -> None:
+        """Restore the exact seed scenario without replacing the viewer's MjData."""
+        mujoco.mj_resetData(self.model, self.data)
+        self.items = make_demo_items(self.seed)
         self.by_name = {item.part_name: item for item in self.items}
         self.qpos_addresses = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
@@ -169,6 +176,17 @@ class SortingDemo:
             park_part(self.data, self.qpos_addresses[name], index)
         update_belt(self.data, self.segment_qpos_addresses, self.segment_dof_addresses)
         mujoco.mj_forward(self.model, self.data)
+
+    def request_reset(self) -> None:
+        self.reset_requested.set()
+
+    def reset_if_requested(self) -> bool:
+        if not self.reset_requested.is_set():
+            return False
+        self.reset_requested.clear()
+        self._reset_state()
+        print(f"[reset] Replayed seed {self.seed}")
+        return True
 
     def _tool_arm_states(self) -> tuple[ArmState, ArmState]:
         return tuple(
@@ -297,16 +315,54 @@ class SortingDemo:
             self.step()
         print(f"finished: placed={sorted(self.placed)} missed={sorted(self.missed)}")
 
-    def run_viewer(self, duration_s: float) -> None:
-        with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+    def run_viewer(self, duration_s: float, show_controls: bool) -> None:
+        controls_alive = threading.Event()
+        controls_alive.set()
+
+        def key_callback(keycode: int) -> None:
+            if chr(keycode).lower() == "r":
+                self.request_reset()
+
+        if show_controls:
+            threading.Thread(target=launch_control_window, args=(self.seed, self.request_reset, controls_alive), daemon=True).start()
+        with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as viewer:
             last_wall_time = time.perf_counter()
             while viewer.is_running():
+                if self.reset_if_requested():
+                    with viewer.lock():
+                        viewer.sync()
                 now = time.perf_counter()
                 target_time = self.data.time + min(now - last_wall_time, 0.05)
                 last_wall_time = now
                 while self.data.time < target_time and self.data.time < duration_s:
                     self.step()
                 viewer.sync()
+        controls_alive.clear()
+
+
+def launch_control_window(seed: int, request_reset: callable, controls_alive: threading.Event) -> None:
+    """Small companion window because passive viewer has no public custom-button API."""
+    import tkinter as tk
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("Nova5 Demo Controls")
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    frame = ttk.Frame(root, padding=10)
+    frame.grid()
+    ttk.Label(frame, text=f"Seed {seed}").grid(row=0, column=0, padx=4, pady=(0, 6))
+    ttk.Button(frame, text="Restart", command=request_reset).grid(row=1, column=0, sticky="ew", padx=4)
+    ttk.Label(frame, text="Viewer shortcut: R").grid(row=2, column=0, padx=4, pady=(6, 0))
+
+    def close_when_demo_ends() -> None:
+        if controls_alive.is_set():
+            root.after(250, close_when_demo_ends)
+        else:
+            root.destroy()
+
+    root.after(250, close_when_demo_ends)
+    root.mainloop()
 
 
 def main() -> None:
@@ -315,12 +371,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--duration", type=float, default=22.0)
     parser.add_argument("--headless", action="store_true", help="Run the scenario without opening the MuJoCo viewer.")
+    parser.add_argument("--no-controls", action="store_true", help="Do not show the clickable restart control window.")
     args = parser.parse_args()
     demo = SortingDemo(args.model.resolve(), args.seed)
     if args.headless:
         demo.run_headless(args.duration)
     else:
-        demo.run_viewer(args.duration)
+        demo.run_viewer(args.duration, not args.no_controls)
 
 
 if __name__ == "__main__":
