@@ -22,8 +22,15 @@ pip install -r requirements.txt
 # 開啟 MuJoCo 流水線
 python src\run_sorting_line.py
 
+# 開啟固定 seed 的雙手臂抓取與分揀演示
+python src\run_sorting_demo.py --seed 42
+
 # 執行可重現的第一版基準範例
 python src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
 
 基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
+
+## MuJoCo 抓取演示
+
+`src/run_sorting_demo.py` 是建置展示用的少量投料場景。固定 seed 會產生 4 件 `MIDDLE / RIGHT / LEFT / MIDDLE` 物件，中央協調器會先安排共享區與專屬區任務，再讓兩台 Nova5 以位置 IK 執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。為了讓示範穩定，夾爪閉合後使用運動學附著帶走物件；這和後續純接觸摩擦抓取驗證分開。

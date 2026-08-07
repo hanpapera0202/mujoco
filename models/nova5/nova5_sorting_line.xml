@@ -32,6 +32,8 @@
     <material name="guard_mat" rgba="0.95 0.72 0.08 0.32"/>
     <material name="reject_mat" rgba="0.82 0.20 0.16 1"/>
     <material name="finished_mat" rgba="0.20 0.68 0.42 1"/>
+    <material name="left_bin_mat" rgba="0.12 0.42 0.88 1"/>
+    <material name="right_bin_mat" rgba="0.96 0.48 0.12 1"/>
     <material name="sensor_mat" rgba="0.10 0.92 0.78 0.85"/>
 
     <mesh name="base_link" content_type="model/stl" file="../meshes/nova5/base_link.STL"/>
@@ -265,7 +267,23 @@
       </body>
     </body>
 
-    <!-- Lower 10x10 placement area. -->
+    <!-- Visible output trays for the dual-arm sorting demonstration. -->
+    <body name="left_output_tray" pos="-1.10 -0.62 0.055">
+      <geom name="left_tray_floor" type="box" size="0.22 0.18 0.018" material="left_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.18 0.07" material="left_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0.22 0 0.07" size="0.018 0.18 0.07" material="left_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0 -0.18 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0 0.18 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="1"/>
+      <site name="left_bin_drop" pos="0 0 0.055" size="0.06" rgba="0.1 0.45 1 0.35"/>
+    </body>
+    <body name="right_output_tray" pos="1.10 -0.62 0.055">
+      <geom name="right_tray_floor" type="box" size="0.22 0.18 0.018" material="right_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.18 0.07" material="right_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0.22 0 0.07" size="0.018 0.18 0.07" material="right_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0 -0.18 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="1"/>
+      <geom type="box" pos="0 0.18 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="1"/>
+      <site name="right_bin_drop" pos="0 0 0.055" size="0.06" rgba="1 0.45 0.1 0.35"/>
+    </body>
   </worldbody>
 
   <contact>

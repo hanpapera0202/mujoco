@@ -32,6 +32,24 @@ sorting_cells:
     side: right
     primary_conveyor_x_range: [0.0, 0.34]
 
+output_trays:
+  left_bin:
+    site: left_bin_drop
+    owner: robot_A
+    position_xyz_m: [-1.10, -0.62, 0.055]
+  right_bin:
+    site: right_bin_drop
+    owner: robot_B
+    position_xyz_m: [1.10, -0.62, 0.055]
+
+demo:
+  runner: src/run_sorting_demo.py
+  default_seed: 42
+  item_count: 4
+  classes: [middle, right, left, middle]
+  grasp_model: position_ik_with_kinematic_attachment
+  motion_sequence: [approach, descend, close, lift, transfer, lower, open, retreat, home]
+
 control_contract:
   perception: [part_id, class, pose_xyzquat, confidence]
   action_order: [detect, reserve_robot, approach, grasp, verify_grasp, place, verify_place]
