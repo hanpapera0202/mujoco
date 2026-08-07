@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nova5 雙手臂分揀控制台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div><strong>Nova5 雙手臂分揀</strong><span id="connection">連線中</span></div>
+    <div class="clock">模擬時間 <output id="sim-time">0.000 s</output></div>
+  </header>
+  <main>
+    <section class="controls" aria-label="演示控制">
+      <div class="button-row">
+        <button id="resume" class="primary" type="button">開始 / 繼續</button>
+        <button id="pause" type="button">暫停</button>
+        <button id="restart" type="button">重新播放</button>
+      </div>
+      <form id="settings">
+        <h1>演示設定</h1>
+        <label>隨機種子 Seed<input name="seed" type="number" step="1" required></label>
+        <label>演示速度<input name="simulation_speed" type="number" min="0.1" max="4" step="0.1" required></label>
+        <label>皮帶速度 (m/s)<input name="belt_speed_mps" type="number" min="0.02" max="0.5" step="0.01" required></label>
+        <h1>中央協調器</h1>
+        <label>滾動視窗 (s)<input name="horizon_s" type="number" min="0.5" max="15" step="0.1" required></label>
+        <label>雙臂並行加分<input name="parallel_bonus" type="number" min="0.1" max="20" step="0.1" required></label>
+        <label>預估取件速度 (m/s)<input name="pick_speed_mps" type="number" min="0.1" max="2" step="0.05" required></label>
+        <label>固定週期時間 (s)<input name="fixed_cycle_s" type="number" min="0.1" max="5" step="0.1" required></label>
+        <label>期限權重<input name="urgency_weight" type="number" min="0.1" max="20" step="0.1" required></label>
+        <label>成功率權重<input name="success_weight" type="number" min="0.1" max="20" step="0.1" required></label>
+        <label>移動距離權重<input name="travel_weight" type="number" min="0.01" max="10" step="0.01" required></label>
+        <button class="primary" type="submit">套用設定並重新播放</button>
+      </form>
+    </section>
+    <section class="monitor" aria-label="即時狀態">
+      <div class="metrics">
+        <div><span>已投料</span><strong id="spawned">0</strong></div>
+        <div><span>已放置</span><strong id="placed">0</strong></div>
+        <div><span>漏件</span><strong id="missed">0</strong></div>
+      </div>
+      <section class="panel"><h2>手臂任務</h2><div id="missions" class="rows"></div></section>
+      <section class="panel"><h2>最新中央派工</h2><div id="assignments" class="rows"></div><details><summary>拒絕候選</summary><pre id="rejected"></pre></details></section>
+      <section class="panel"><h2>事件紀錄</h2><ol id="events"></ol></section>
+      <p class="hint">關閉此網頁不會停止演示。重新開啟 <code>http://127.0.0.1:8765</code> 即可；MuJoCo 視窗按 <kbd>R</kbd> 也能重播。</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -22,7 +22,7 @@ pip install -r requirements.txt
 # 開啟 MuJoCo 流水線
 python src\run_sorting_line.py
 
-# 開啟固定 seed 的雙手臂抓取與分揀演示
+# 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -34,3 +34,7 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 ## MuJoCo 抓取演示
 
 `src/run_sorting_demo.py` 是建置展示用的少量投料場景。固定 seed 會產生 4 件 `MIDDLE / RIGHT / LEFT / MIDDLE` 物件，中央協調器會先安排共享區與專屬區任務，再讓兩台 Nova5 以位置 IK 執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。為了讓示範穩定，夾爪閉合後使用運動學附著帶走物件；這和後續純接觸摩擦抓取驗證分開。
+
+啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
+
+演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。

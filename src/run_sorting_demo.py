@@ -12,7 +12,8 @@ import random
 import sys
 import threading
 import time
-from dataclasses import dataclass
+import webbrowser
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,6 @@ from run_sorting_line import (
     joint_dof_address,
     joint_qpos_address,
     park_part,
-    update_belt,
 )
 
 
@@ -47,6 +47,19 @@ PICK_HEIGHT_M = 0.20
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
+
+
+@dataclass
+class DemoParameters:
+    horizon_s: float = 5.0
+    parallel_bonus: float = 2.0
+    pick_speed_mps: float = 0.55
+    fixed_cycle_s: float = 1.1
+    urgency_weight: float = 3.0
+    success_weight: float = 2.0
+    travel_weight: float = 0.25
+    belt_speed_mps: float = BELT_SPEED_MPS
+    simulation_speed: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -147,12 +160,17 @@ def interpolate(first: np.ndarray, second: np.ndarray, ratio: float) -> np.ndarr
 
 
 class SortingDemo:
-    def __init__(self, model_path: Path, seed: int) -> None:
+    def __init__(self, model_path: Path, seed: int, parameters: DemoParameters | None = None) -> None:
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = CONTROL_STEP_S
         self.data = mujoco.MjData(self.model)
         self.seed = seed
+        self.parameters = parameters or DemoParameters()
+        self.state_lock = threading.RLock()
         self.reset_requested = threading.Event()
+        self.paused = False
+        self.latest_decision: dict[str, object] = {"assignments": [], "rejected": {}}
+        self.event_log: list[dict[str, object]] = []
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -164,7 +182,15 @@ class SortingDemo:
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
-        self.coordinator = CentralCoordinator(pick_speed_mps=0.55, fixed_cycle_s=1.1)
+        self.coordinator = CentralCoordinator(
+            pick_speed_mps=self.parameters.pick_speed_mps,
+            fixed_cycle_s=self.parameters.fixed_cycle_s,
+            horizon_s=self.parameters.horizon_s,
+            parallel_bonus=self.parameters.parallel_bonus,
+            urgency_weight=self.parameters.urgency_weight,
+            success_weight=self.parameters.success_weight,
+            travel_weight=self.parameters.travel_weight,
+        )
         self.missions: dict[ArmId, ArmMission] = {}
         self.spawned: set[str] = set()
         self.placed: set[str] = set()
@@ -172,21 +198,75 @@ class SortingDemo:
         self.locked_positions: dict[str, np.ndarray] = {}
         self.last_schedule_s = -SCHEDULER_PERIOD_S
         self.output_offsets = {"left_bin": 0, "right_bin": 0}
+        self.latest_decision = {"assignments": [], "rejected": {}}
+        self.event_log = []
         for index, name in enumerate(PART_NAMES):
             park_part(self.data, self.qpos_addresses[name], index)
-        update_belt(self.data, self.segment_qpos_addresses, self.segment_dof_addresses)
+        self._update_belt()
         mujoco.mj_forward(self.model, self.data)
 
     def request_reset(self) -> None:
         self.reset_requested.set()
 
+    def set_paused(self, paused: bool) -> None:
+        with self.state_lock:
+            self.paused = paused
+
+    def update_settings(self, values: dict[str, object]) -> None:
+        """Apply validated dashboard settings at the next deterministic restart."""
+        with self.state_lock:
+            if "seed" in values:
+                self.seed = int(values["seed"])
+            for field_name in asdict(self.parameters):
+                if field_name in values:
+                    value = float(values[field_name])
+                    if value <= 0.0:
+                        raise ValueError(f"{field_name} must be positive")
+                    setattr(self.parameters, field_name, value)
+        self.request_reset()
+
     def reset_if_requested(self) -> bool:
         if not self.reset_requested.is_set():
             return False
         self.reset_requested.clear()
-        self._reset_state()
+        with self.state_lock:
+            self._reset_state()
         print(f"[reset] Replayed seed {self.seed}")
         return True
+
+    def snapshot(self) -> dict[str, object]:
+        with self.state_lock:
+            missions = {
+                arm.value: {
+                    "object_id": mission.object_id,
+                    "stage": mission.keyframes[mission.keyframe_index][0],
+                    "placement_zone": mission.placement_zone,
+                }
+                for arm, mission in self.missions.items()
+                if not mission.done
+            }
+            return {
+                "seed": self.seed,
+                "time_s": round(float(self.data.time), 3),
+                "paused": self.paused,
+                "parameters": asdict(self.parameters),
+                "counts": {"spawned": len(self.spawned), "placed": len(self.placed), "missed": len(self.missed)},
+                "missions": missions,
+                "decision": self.latest_decision,
+                "events": self.event_log[-12:],
+            }
+
+    def _log(self, event: str, **fields: object) -> None:
+        entry = {"time_s": round(float(self.data.time), 3), "event": event, **fields}
+        self.event_log.append(entry)
+        print(f"[{self.data.time:5.2f}s] {event.upper()} " + " ".join(f"{key}={value}" for key, value in fields.items()))
+
+    def _update_belt(self) -> None:
+        travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
+        phase_pitch = CONVEYOR_LOOP_LENGTH_M / SEGMENT_COUNT
+        for index, (qpos_address, dof_address) in enumerate(zip(self.segment_qpos_addresses, self.segment_dof_addresses)):
+            self.data.qpos[qpos_address] = UPSTREAM_CENTER_Y_M - ((index * phase_pitch + travelled) % CONVEYOR_LOOP_LENGTH_M)
+            self.data.qvel[dof_address] = -self.parameters.belt_speed_mps
 
     def _tool_arm_states(self) -> tuple[ArmState, ArmState]:
         return tuple(
@@ -204,9 +284,9 @@ class SortingDemo:
             xyz = self.data.qpos[self.qpos_addresses[name] : self.qpos_addresses[name] + 3]
             if xyz[1] < TAIL_EXIT_Y_M:
                 self.missed.add(name)
-                print(f"[{self.data.time:5.2f}s] MISSED {name}: tail_exit")
+                self._log("missed", object_id=name, reason="tail_exit")
                 continue
-            remaining = min(item.deadline_s, max(0.1, (xyz[1] - TAIL_EXIT_Y_M) / BELT_SPEED_MPS))
+            remaining = min(item.deadline_s, max(0.1, (xyz[1] - TAIL_EXIT_Y_M) / self.parameters.belt_speed_mps))
             observations.append(ObjectObservation(name, item.object_class, tuple(xyz), remaining, {ArmId.A: 0.93, ArmId.B: 0.93}))
         return observations
 
@@ -255,13 +335,26 @@ class SortingDemo:
             return
         self.last_schedule_s = self.data.time
         decision = self.coordinator.decide(self.data.time, self._available_observations(), self._tool_arm_states())
+        if decision.assignments:
+            self.latest_decision = {
+                "assignments": [
+                    {
+                        "object_id": item.object_id,
+                        "arm": item.arm.value,
+                        "class": item.object_class.value,
+                        "zone": item.workspace_zone,
+                        "placement": item.placement_zone,
+                        "interval_s": [round(value, 3) for value in item.interval_s],
+                        "score": round(item.score, 4),
+                    }
+                    for item in decision.assignments
+                ],
+                "rejected": decision.rejected,
+            }
         for assignment in decision.assignments:
             mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
             self.missions[assignment.arm] = mission
-            print(
-                f"[{self.data.time:5.2f}s] ASSIGN {assignment.object_id} ({assignment.object_class.value}) "
-                f"-> Robot {assignment.arm.value}, {assignment.placement_zone}"
-            )
+            self._log("assign", object_id=assignment.object_id, arm=assignment.arm.value, placement=assignment.placement_zone)
 
     def _update_missions(self) -> None:
         for arm, mission in list(self.missions.items()):
@@ -272,7 +365,7 @@ class SortingDemo:
             kin.set_joint_pose(interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S))), opening)
             if stage == "lift" and not mission.attached:
                 mission.attached = True
-                print(f"[{self.data.time:5.2f}s] GRASP {mission.object_id} by Robot {arm.value}")
+                self._log("grasp", object_id=mission.object_id, arm=arm.value)
             if mission.attached:
                 object_address = self.qpos_addresses[mission.object_id]
                 tool_xyz = kin.tool_position()
@@ -286,7 +379,7 @@ class SortingDemo:
                 tool_xyz = kin.tool_position()
                 self.locked_positions[mission.object_id] = tool_xyz.copy()
                 self.data.qpos[object_address : object_address + 7] = (*tool_xyz, 1.0, 0.0, 0.0, 0.0)
-                print(f"[{self.data.time:5.2f}s] PLACE {mission.object_id} in {mission.placement_zone}")
+                self._log("place", object_id=mission.object_id, placement=mission.placement_zone)
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
             if mission.done:
@@ -295,74 +388,51 @@ class SortingDemo:
                 self.coordinator.mark_completed(mission.object_id)
 
     def step(self) -> None:
-        update_belt(self.data, self.segment_qpos_addresses, self.segment_dof_addresses)
-        for item in self.items:
-            if item.part_name not in self.spawned and self.data.time >= item.spawn_time_s:
-                place_part(self.data, self.qpos_addresses[item.part_name], item.spawn_xyz)
-                self.spawned.add(item.part_name)
-                print(f"[{self.data.time:5.2f}s] INFEED {item.part_name} ({item.object_class.value})")
-        self._schedule()
-        self._update_missions()
-        for name, xyz in self.locked_positions.items():
-            address = self.qpos_addresses[name]
-            self.data.qpos[address : address + 7] = (*xyz, 1.0, 0.0, 0.0, 0.0)
-            self.data.qvel[address : address + 6] = 0.0
-        mujoco.mj_forward(self.model, self.data)
-        mujoco.mj_step(self.model, self.data)
+        with self.state_lock:
+            self._update_belt()
+            for item in self.items:
+                if item.part_name not in self.spawned and self.data.time >= item.spawn_time_s:
+                    place_part(self.data, self.qpos_addresses[item.part_name], item.spawn_xyz)
+                    self.spawned.add(item.part_name)
+                    self._log("infeed", object_id=item.part_name, object_class=item.object_class.value)
+            self._schedule()
+            self._update_missions()
+            for name, xyz in self.locked_positions.items():
+                address = self.qpos_addresses[name]
+                self.data.qpos[address : address + 7] = (*xyz, 1.0, 0.0, 0.0, 0.0)
+                self.data.qvel[address : address + 6] = 0.0
+            mujoco.mj_forward(self.model, self.data)
+            mujoco.mj_step(self.model, self.data)
 
     def run_headless(self, duration_s: float) -> None:
         while self.data.time < duration_s:
             self.step()
         print(f"finished: placed={sorted(self.placed)} missed={sorted(self.missed)}")
 
-    def run_viewer(self, duration_s: float, show_controls: bool) -> None:
-        controls_alive = threading.Event()
-        controls_alive.set()
+    def run_viewer(self, duration_s: float, dashboard_url: str | None = None) -> None:
 
         def key_callback(keycode: int) -> None:
             if chr(keycode).lower() == "r":
                 self.request_reset()
 
-        if show_controls:
-            threading.Thread(target=launch_control_window, args=(self.seed, self.request_reset, controls_alive), daemon=True).start()
+        if dashboard_url:
+            webbrowser.open(dashboard_url)
         with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as viewer:
             last_wall_time = time.perf_counter()
+            accumulated_s = 0.0
             while viewer.is_running():
                 if self.reset_if_requested():
                     with viewer.lock():
                         viewer.sync()
+                    accumulated_s = 0.0
                 now = time.perf_counter()
-                target_time = self.data.time + min(now - last_wall_time, 0.05)
+                accumulated_s += min(now - last_wall_time, 0.05) * self.parameters.simulation_speed
                 last_wall_time = now
-                while self.data.time < target_time and self.data.time < duration_s:
+                while not self.paused and accumulated_s >= CONTROL_STEP_S and self.data.time < duration_s:
                     self.step()
+                    accumulated_s -= CONTROL_STEP_S
                 viewer.sync()
-        controls_alive.clear()
-
-
-def launch_control_window(seed: int, request_reset: callable, controls_alive: threading.Event) -> None:
-    """Small companion window because passive viewer has no public custom-button API."""
-    import tkinter as tk
-    from tkinter import ttk
-
-    root = tk.Tk()
-    root.title("Nova5 Demo Controls")
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    frame = ttk.Frame(root, padding=10)
-    frame.grid()
-    ttk.Label(frame, text=f"Seed {seed}").grid(row=0, column=0, padx=4, pady=(0, 6))
-    ttk.Button(frame, text="Restart", command=request_reset).grid(row=1, column=0, sticky="ew", padx=4)
-    ttk.Label(frame, text="Viewer shortcut: R").grid(row=2, column=0, padx=4, pady=(6, 0))
-
-    def close_when_demo_ends() -> None:
-        if controls_alive.is_set():
-            root.after(250, close_when_demo_ends)
-        else:
-            root.destroy()
-
-    root.after(250, close_when_demo_ends)
-    root.mainloop()
+                time.sleep(0.001)
 
 
 def main() -> None:
@@ -371,13 +441,20 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--duration", type=float, default=22.0)
     parser.add_argument("--headless", action="store_true", help="Run the scenario without opening the MuJoCo viewer.")
-    parser.add_argument("--no-controls", action="store_true", help="Do not show the clickable restart control window.")
+    parser.add_argument("--no-dashboard", action="store_true", help="Do not start the local web dashboard.")
     args = parser.parse_args()
     demo = SortingDemo(args.model.resolve(), args.seed)
     if args.headless:
         demo.run_headless(args.duration)
     else:
-        demo.run_viewer(args.duration, not args.no_controls)
+        from demo_dashboard import start_dashboard
+
+        dashboard = None if args.no_dashboard else start_dashboard(demo)
+        try:
+            demo.run_viewer(args.duration, dashboard.url if dashboard else None)
+        finally:
+            if dashboard:
+                dashboard.stop()
 
 
 if __name__ == "__main__":

@@ -92,11 +92,17 @@ class CentralCoordinator:
         fixed_cycle_s: float = 1.2,
         horizon_s: float = 5.0,
         parallel_bonus: float = 2.0,
+        urgency_weight: float = 3.0,
+        success_weight: float = 2.0,
+        travel_weight: float = 0.25,
     ) -> None:
         self.pick_speed_mps = pick_speed_mps
         self.fixed_cycle_s = fixed_cycle_s
         self.horizon_s = horizon_s
         self.parallel_bonus = parallel_bonus
+        self.urgency_weight = urgency_weight
+        self.success_weight = success_weight
+        self.travel_weight = travel_weight
         self.reservations: list[Reservation] = []
 
     def decide(
@@ -174,7 +180,7 @@ class CentralCoordinator:
             return None, "no_grasp_candidate"
 
         urgency = 1.0 / max(obj.deadline_s, 0.05)
-        score = 3.0 * urgency + 2.0 * success - 0.25 * travel_m
+        score = self.urgency_weight * urgency + self.success_weight * success - self.travel_weight * travel_m
         return Candidate(
             arm=arm.arm,
             object_id=obj.object_id,
