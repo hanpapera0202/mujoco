@@ -95,4 +95,4 @@ MuJoCo 執行層再加入中央走廊門檻。若另一手臂正處於 `approach
 
 ## 7. 與 MuJoCo 的界線
 
-演示器的 IK 與運動學附著位於 [run_sorting_demo.py](../src/run_sorting_demo.py)。它以固定 seed 驗證中央端的任務序列、雙臂並行與輸出托盤路由。下一階段要升級為純物理抓取時，保留上列高階公式不變，只將 `q_(a,o)`、`eta(a,o)` 和近失事件改由 MuJoCo 實測結果提供。
+演示器的 IK、路徑碰撞預檢與接觸式抓取位於 [run_sorting_demo.py](../src/run_sorting_demo.py)。它以固定 seed 驗證中央端的任務序列、共享區保留與輸出托盤路由。工件不使用運動學附著；`q_(a,o)`、`eta(a,o)` 和近失事件可直接由 MuJoCo 的接觸與落盤驗證結果提供。

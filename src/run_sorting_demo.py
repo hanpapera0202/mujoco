@@ -1,8 +1,7 @@
 """Single-seed dual-Nova5 sorting demonstration driven by the central coordinator.
 
-The demo uses position IK for arm motion and a kinematic attachment after the
-gripper closes.  It is intentionally a stable integration demo; pure contact
-grasping is a later physics-validation stage.
+All arm motion is driven through MuJoCo position control. A part is counted as
+grasped only after a finger pad reports a physical MuJoCo contact.
 """
 
 from __future__ import annotations
@@ -43,14 +42,11 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
-PICK_HEIGHT_M = 0.23
+PICK_HEIGHT_M = 0.16
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
 GRASP_XY_TOLERANCE_M = 0.055
-EXPECTED_OBJECT_BELOW_GRASP_M = 0.110
-GRASP_Z_TOLERANCE_M = 0.030
-CENTRAL_CORRIDOR_BLOCKING_STAGES = {"approach", "descend", "close", "lift"}
 
 
 @dataclass
@@ -87,8 +83,7 @@ class ArmMission:
     keyframes: list[tuple[str, float, np.ndarray, float]]
     keyframe_index: int = 0
     keyframe_started_s: float = 0.0
-    attached: bool = False
-    attachment_local_xyz: np.ndarray | None = None
+    grasped: bool = False
     failed: bool = False
 
     @property
@@ -113,6 +108,18 @@ class ArmKinematics:
             model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{side}_finger_slide")]
             for side in ("left", "right")
         ])
+        self.position_actuator_ids = np.array([
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{prefix}_joint{index}_position")
+            for index in range(1, 7)
+        ])
+        self.finger_actuator_ids = np.array([
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{prefix}_{side}_finger_position")
+            for side in ("left", "right")
+        ])
+        self.finger_geom_ids = {
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{prefix}_{side}_finger_pad")
+            for side in ("left", "right")
+        }
         self.home_qpos = data.qpos[self.qpos_addresses].copy()
 
     def tool_position(self) -> np.ndarray:
@@ -145,10 +152,14 @@ class ArmKinematics:
         mujoco.mj_forward(self.model, self.data)
         return solution
 
-    def set_joint_pose(self, qpos: np.ndarray, gripper_opening: float) -> None:
+    def command_joint_pose(self, qpos: np.ndarray, gripper_opening: float) -> None:
+        # The arm trajectory is position-controlled for deterministic replay.
+        # The free part is never repositioned here: it can move only by contact.
         self.data.qpos[self.qpos_addresses] = qpos
         self.data.qvel[self.dof_addresses] = 0.0
         self.data.qpos[self.finger_qpos_addresses] = gripper_opening
+        self.data.ctrl[self.position_actuator_ids] = qpos
+        self.data.ctrl[self.finger_actuator_ids] = gripper_opening
 
 
 def place_part(data: mujoco.MjData, qpos_address: int, xyz: tuple[float, float, float]) -> None:
@@ -163,7 +174,6 @@ def make_demo_items(seed: int) -> list[DemoItem]:
     return [
         DemoItem("part_01", ObjectClass.MIDDLE, 0.2, (0.0 + jitter(0.03), 1.02, 0.13), 4.35),
         DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.28 + jitter(0.03), 0.92, 0.13), 4.75),
-        DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.28 + jitter(0.03), 1.22, 0.13), 4.85),
     ]
 
 
@@ -184,6 +194,7 @@ class SortingDemo:
         self.reset_requested = threading.Event()
         self.paused = False
         self.latest_decision: dict[str, object] = {"assignments": [], "rejected": {}}
+        self.last_preflight: dict[str, object] = {"status": "pending", "reason": "waiting_for_task"}
         self.event_log: list[dict[str, object]] = []
         self._reset_state()
 
@@ -196,6 +207,8 @@ class SortingDemo:
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
+        for kin in self.kinematics.values():
+            kin.command_joint_pose(kin.home_qpos, 0.035)
         self.coordinator = CentralCoordinator(
             pick_speed_mps=self.parameters.pick_speed_mps,
             fixed_cycle_s=self.parameters.fixed_cycle_s,
@@ -210,10 +223,10 @@ class SortingDemo:
         self.spawned: set[str] = set()
         self.placed: set[str] = set()
         self.missed: set[str] = set()
-        self.locked_positions: dict[str, np.ndarray] = {}
         self.last_schedule_s = -SCHEDULER_PERIOD_S
         self.output_offsets = {"left_bin": 0, "right_bin": 0}
         self.latest_decision = {"assignments": [], "rejected": {}}
+        self.last_preflight = {"status": "pending", "reason": "waiting_for_task"}
         self.event_log = []
         for index, name in enumerate(PART_NAMES):
             park_part(self.data, self.qpos_addresses[name], index)
@@ -275,6 +288,7 @@ class SortingDemo:
                 "missions": missions,
                 "deferred": [item.object_id for item in self.deferred_assignments.values()],
                 "decision": self.latest_decision,
+                "preflight": self.last_preflight,
                 "events": self.event_log[-12:],
             }
 
@@ -292,6 +306,56 @@ class SortingDemo:
             if (first.startswith("A_") and second.startswith("B_")) or (first.startswith("B_") and second.startswith("A_")):
                 contacts.append((first, second))
         return contacts
+
+    def _geom_description(self, geom_id: int) -> str:
+        geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+        if geom_name:
+            return geom_name
+        body_id = self.model.geom_bodyid[geom_id]
+        return mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id) or str(geom_id)
+
+    @staticmethod
+    def _arm_for_description(description: str) -> ArmId | None:
+        if description.startswith("A_"):
+            return ArmId.A
+        if description.startswith("B_"):
+            return ArmId.B
+        return None
+
+    def _forbidden_contacts(self, data: mujoco.MjData) -> list[tuple[str, str]]:
+        """Return arm-arm and arm-environment contacts; object contacts are allowed."""
+        forbidden: list[tuple[str, str]] = []
+        for index in range(data.ncon):
+            contact = data.contact[index]
+            first = self._geom_description(contact.geom1)
+            second = self._geom_description(contact.geom2)
+            first_arm = self._arm_for_description(first)
+            second_arm = self._arm_for_description(second)
+            if first_arm is not None and second_arm is not None and first_arm is not second_arm:
+                forbidden.append((first, second))
+            elif first_arm is not None and not second.startswith("part_"):
+                forbidden.append((first, second))
+            elif second_arm is not None and not first.startswith("part_"):
+                forbidden.append((first, second))
+        return forbidden
+
+    def _preflight_mission(self, mission: ArmMission) -> tuple[bool, str]:
+        """Sample an IK path before it is admitted to the physics simulation."""
+        kin = self.kinematics[mission.arm]
+        trial = mujoco.MjData(self.model)
+        trial.qpos[:] = self.data.qpos
+        start = self.data.qpos[kin.qpos_addresses].copy()
+        targets = [frame[2] for frame in mission.keyframes]
+        previous = start
+        for target in targets:
+            for ratio in np.linspace(0.2, 1.0, 5):
+                trial.qpos[kin.qpos_addresses] = interpolate(previous, target, float(ratio))
+                mujoco.mj_forward(self.model, trial)
+                contacts = self._forbidden_contacts(trial)
+                if contacts:
+                    return False, f"{contacts[0][0]} / {contacts[0][1]}"
+            previous = target
+        return True, "clear"
 
     def _update_belt(self) -> None:
         travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
@@ -311,7 +375,7 @@ class SortingDemo:
         for name, item in self.by_name.items():
             if name not in self.spawned or name in self.placed or name in self.missed:
                 continue
-            if any(mission.object_id == name for mission in self.missions.values()):
+            if self._object_is_claimed(name):
                 continue
             xyz = self.data.qpos[self.qpos_addresses[name] : self.qpos_addresses[name] + 3]
             if xyz[1] < TAIL_EXIT_Y_M:
@@ -321,6 +385,11 @@ class SortingDemo:
             remaining = min(item.deadline_s, max(0.1, (xyz[1] - TAIL_EXIT_Y_M) / self.parameters.belt_speed_mps))
             observations.append(ObjectObservation(name, item.object_class, tuple(xyz), remaining, {ArmId.A: 0.93, ArmId.B: 0.93}))
         return observations
+
+    def _object_is_claimed(self, object_id: str) -> bool:
+        return any(mission.object_id == object_id for mission in self.missions.values()) or any(
+            assignment.object_id == object_id for assignment in self.deferred_assignments.values()
+        )
 
     def _plan_mission(self, arm: ArmId, object_id: str, placement_zone: str) -> ArmMission:
         kin = self.kinematics[arm]
@@ -389,6 +458,8 @@ class SortingDemo:
                 "rejected": decision.rejected,
             }
         for assignment in decision.assignments:
+            if self._object_is_claimed(assignment.object_id):
+                continue
             if self._may_enter_assignment(assignment):
                 self._start_assignment(assignment)
             else:
@@ -398,11 +469,10 @@ class SortingDemo:
     def _may_enter_assignment(self, assignment) -> bool:
         if assignment.object_class is not ObjectClass.MIDDLE:
             return True
-        return all(
-            mission.keyframes[mission.keyframe_index][0] not in CENTRAL_CORRIDOR_BLOCKING_STAGES
-            for arm, mission in self.missions.items()
-            if arm is not assignment.arm
-        )
+        # A middle task is admitted only after the other arm fully retreats.
+        # This deliberately sacrifices one overlap window to give a hard
+        # safety boundary for the first physical-contact benchmark.
+        return all(arm is assignment.arm for arm in self.missions)
 
     def _start_safe_deferred_assignments(self) -> None:
         for arm, assignment in list(self.deferred_assignments.items()):
@@ -412,6 +482,12 @@ class SortingDemo:
 
     def _start_assignment(self, assignment) -> None:
         mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
+        safe, reason = self._preflight_mission(mission)
+        self.last_preflight = {"status": "clear" if safe else "deferred", "object_id": assignment.object_id, "arm": assignment.arm.value, "reason": reason}
+        if not safe:
+            self.deferred_assignments[assignment.arm] = assignment
+            self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="path_collision", contact=reason)
+            return
         self.missions[assignment.arm] = mission
         self._log("assign", object_id=assignment.object_id, arm=assignment.arm.value, placement=assignment.placement_zone)
 
@@ -421,63 +497,60 @@ class SortingDemo:
             stage, duration, target, opening = mission.keyframes[mission.keyframe_index]
             elapsed = self.data.time - mission.keyframe_started_s
             current = self.data.qpos[kin.qpos_addresses].copy()
-            kin.set_joint_pose(interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S))), opening)
-            if stage == "close" and elapsed >= duration and not mission.attached:
+            kin.command_joint_pose(interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S))), opening)
+            if stage == "close" and elapsed >= duration and not mission.grasped:
                 if not self._confirm_grasp(arm, mission):
                     continue
-            if mission.attached:
-                object_address = self.qpos_addresses[mission.object_id]
-                grasp_xyz = kin.grasp_position()
-                grasp_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3)
-                object_xyz = grasp_xyz + grasp_xmat @ mission.attachment_local_xyz
-                self.data.qpos[object_address : object_address + 7] = (*object_xyz, 1.0, 0.0, 0.0, 0.0)
-                self.data.qvel[object_address : object_address + 6] = 0.0
             if elapsed < duration:
                 continue
-            if stage == "open" and mission.attached:
-                mission.attached = False
-                object_address = self.qpos_addresses[mission.object_id]
-                grasp_xyz = kin.grasp_position()
-                self.locked_positions[mission.object_id] = grasp_xyz.copy()
-                self.data.qpos[object_address : object_address + 7] = (*grasp_xyz, 1.0, 0.0, 0.0, 0.0)
-                self._log("place", object_id=mission.object_id, placement=mission.placement_zone)
+            if stage == "open" and mission.grasped:
+                self._log("release", object_id=mission.object_id, placement=mission.placement_zone)
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
             if mission.done:
                 self.missions.pop(arm)
-                if not mission.failed:
+                if not mission.failed and self._part_is_in_target_bin(mission.object_id, mission.placement_zone):
                     self.placed.add(mission.object_id)
+                    self._log("place", object_id=mission.object_id, placement=mission.placement_zone)
+                elif not mission.failed:
+                    self.missed.add(mission.object_id)
+                    self._log("missed", object_id=mission.object_id, reason="placement_not_verified")
                 self.coordinator.mark_completed(mission.object_id)
 
     def _confirm_grasp(self, arm: ArmId, mission: ArmMission) -> bool:
-        """Attach only when the closing gripper physically reaches the free part."""
+        """Accept a grasp only after a physical finger-pad contact is reported."""
         kin = self.kinematics[arm]
-        object_address = self.qpos_addresses[mission.object_id]
-        object_xyz = self.data.qpos[object_address : object_address + 3].copy()
-        grasp_xyz = kin.grasp_position()
-        delta = object_xyz - grasp_xyz
-        xy_error = float(np.linalg.norm(delta[:2]))
-        z_alignment_error = abs(float(delta[2]) + EXPECTED_OBJECT_BELOW_GRASP_M)
-        if xy_error <= GRASP_XY_TOLERANCE_M and z_alignment_error <= GRASP_Z_TOLERANCE_M:
-            grasp_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3)
-            mission.attachment_local_xyz = grasp_xmat.T @ delta
-            mission.attached = True
-            self._log("grasp", object_id=mission.object_id, arm=arm.value, xy_error_m=round(xy_error, 4))
+        part_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, mission.object_id)
+        part_geoms = set(range(self.model.body_geomadr[part_body], self.model.body_geomadr[part_body] + self.model.body_geomnum[part_body]))
+        touching_fingers: set[int] = set()
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            pair = {contact.geom1, contact.geom2}
+            if pair.intersection(part_geoms):
+                touching_fingers.update(kin.finger_geom_ids.intersection(pair))
+        if touching_fingers:
+            mission.grasped = True
+            self._log("grasp", object_id=mission.object_id, arm=arm.value, contact="finger_physical", finger_count=len(touching_fingers))
             return True
         self.missed.add(mission.object_id)
         self.coordinator.mark_completed(mission.object_id)
         self._log(
             "missed",
             object_id=mission.object_id,
-            reason="grasp_alignment",
-            xy_error_m=round(xy_error, 4),
-            z_alignment_error_m=round(z_alignment_error, 4),
+            reason="no_finger_contact",
         )
         mission.failed = True
         mission.keyframes = [("recover", 0.6, self.data.qpos[kin.qpos_addresses].copy(), 0.035), ("home", 1.0, kin.home_qpos, 0.035)]
         mission.keyframe_index = 0
         mission.keyframe_started_s = self.data.time
         return False
+
+    def _part_is_in_target_bin(self, object_id: str, placement_zone: str) -> bool:
+        drop_site = "left_bin_drop" if placement_zone == "left_bin" else "right_bin_drop"
+        drop_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, drop_site)
+        part_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
+        delta = part_xyz - self.data.site_xpos[drop_site_id]
+        return abs(delta[0]) <= 0.20 and abs(delta[1]) <= 0.16 and 0.04 <= part_xyz[2] <= 0.18
 
     def step(self) -> None:
         with self.state_lock:
@@ -489,16 +562,12 @@ class SortingDemo:
                     self._log("infeed", object_id=item.part_name, object_class=item.object_class.value)
             self._schedule()
             self._update_missions()
-            for name, xyz in self.locked_positions.items():
-                address = self.qpos_addresses[name]
-                self.data.qpos[address : address + 7] = (*xyz, 1.0, 0.0, 0.0, 0.0)
-                self.data.qvel[address : address + 6] = 0.0
             mujoco.mj_forward(self.model, self.data)
             mujoco.mj_step(self.model, self.data)
-            contacts = self._inter_arm_contacts()
+            contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
                 self.paused = True
-                self._log("safety_stop", reason="inter_arm_contact", contact=contacts[0])
+                self._log("safety_stop", reason="forbidden_contact", contact=contacts[0])
 
     def run_headless(self, duration_s: float) -> None:
         while self.data.time < duration_s and not self.paused:

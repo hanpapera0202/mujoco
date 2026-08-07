@@ -3,7 +3,7 @@ const algorithmSelect = document.querySelector('#algorithm');
 let initialized = false;
 const zh = {
   approach: '接近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', retreat: '撤離', home: '回原位',
-  infeed: '投料', assign: '派工', reserve_wait: '安全等待', grasp: '抓取', place: '放置', missed: '漏件', safety_stop: '安全停止',
+  infeed: '投料', assign: '派工', reserve_wait: '安全等待', grasp: '抓取', release: '鬆開', place: '放置', missed: '漏件', safety_stop: '安全停止',
   left_bin: '左側托盤', right_bin: '右側托盤', shared_middle: '共享中間區', exclusive_left: '左側專屬區', exclusive_right: '右側專屬區',
   middle: '中間件', left: '左側件', right: '右側件', tail_exit: '尾端離開'
 };
@@ -27,6 +27,8 @@ function render(state) {
   const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)}</span>`);
   setRows(document.querySelector('#missions'), missions, '兩台手臂皆可接收任務。');
   document.querySelector('#deferred').textContent = state.deferred.length ? `安全等待：${state.deferred.join('、')} 正等待中央走廊淨空。` : '';
+  const check = state.preflight || {};
+  document.querySelector('#preflight').textContent = check.status === 'clear' ? `路徑碰撞預檢：通過（${check.object_id} / 手臂 ${check.arm}）` : check.status === 'deferred' ? `路徑碰撞預檢：暫緩，${check.reason}` : '路徑碰撞預檢：等待任務';
   document.querySelector('#algorithm-name').textContent = state.algorithm.name;
   const assignments = state.decision.assignments.map(task => `<strong>${task.object_id}</strong><span>手臂 ${task.arm} · ${label(task.zone)}</span><span>${label(task.placement)}</span>`);
   setRows(document.querySelector('#assignments'), assignments, '最新一輪沒有可行派工。');
