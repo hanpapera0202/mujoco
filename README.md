@@ -1,79 +1,42 @@
-# MuJoCo Starter Project
+# Nova5 Dual-Arm Sorting Research
 
-這是一個適用於 Windows 與 MuJoCo 3.11.0 的入門專案，包含：
+Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版。
 
-- 可直接載入的 MJCF 場景
-- Python 控制範例
-- Windows 一鍵啟動腳本
-- 基本安裝與執行說明
+第一版的目的不是直接控制關節，而是在相同的 MuJoCo / IK 執行器前提下，比較不同高階任務分派方法。中央協調器會快速排除不可行候選，再以全域方式指派兩台平等的手臂，並用「工作區 + 時間區間」建立不可撤銷的預約。
 
-## 1. 下載專案
+## 目前規則
 
-```bat
-git clone https://github.com/hanpapera0202/mujoco.git
-cd mujoco
-```
+- 5 秒滾動規劃視窗，兩台手臂每次最多各有一個未完成預約。
+- `LEFT` 只交給 Robot A，放入左側區域；`RIGHT` 只交給 Robot B，放入右側區域。
+- `MIDDLE` 位於共享工作區，中央端同時選擇取件手臂與左/右放置區。
+- 同一共享區時段只能有一台手臂進入；未獲得中間件的手臂會優先處理自己的專屬區任務。
+- 預約一旦建立不重新指派；物件超過尾端而未取件即為 `MISSED`。
 
-## 2. 使用 MuJoCo `simulate.exe` 執行
+## 執行
 
-先確認 MuJoCo 已解壓縮，例如：
-
-```text
-C:\mujoco\mujoco-3.11.0-windows-x86_64
-```
-
-若路徑不同，請修改 `run_windows.bat` 內的 `MUJOCO_HOME`。
-
-雙擊：
-
-```text
-run_windows.bat
-```
-
-或在命令提示字元執行：
-
-```bat
-run_windows.bat
-```
-
-## 3. 使用 Python 執行
-
-建立虛擬環境：
-
-```bat
+```powershell
 py -m venv .venv
 .venv\Scripts\activate
-python -m pip install --upgrade pip
 pip install -r requirements.txt
+
+# 開啟 MuJoCo 流水線
+python src\run_sorting_line.py
+
+# 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
+python src\run_sorting_demo.py --seed 42
+
+# 執行可重現的第一版基準範例
+python src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
 
-執行：
+基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
 
-```bat
-python src\run_simulation.py
-```
+## MuJoCo 抓取演示
 
-## 4. 專案結構
+`src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。固定 seed 先產生 `LEFT` 與 `RIGHT` 工件以供雙臂並行，再交錯產生共享區 `MIDDLE` 工件；皮帶速度為 `0.24 m/s`。中央協調器安排共享區與專屬區任務，再讓兩台 Nova5 以 6D 姿態 IK 維持水平雙指、垂直指面的抓取姿態，依序執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。只有 MuJoCo 回報指墊與工件的實體接觸才會啟用夾持約束；接觸前工件完全由輸送帶物理運動，放開時立即解除約束，且放置必須由工件最後落入目標托盤的範圍驗證。
 
-```text
-mujoco/
-├─ models/
-│  └─ falling_box.xml
-├─ src/
-│  └─ run_simulation.py
-├─ .gitignore
-├─ requirements.txt
-├─ run_windows.bat
-└─ README.md
-```
+目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。若另一手臂正在中央走廊的接近、下降、閉合或抬升階段，`MIDDLE` 任務會先保持預約並在控制台顯示「安全等待」，等中央走廊淨空才啟動；MuJoCo 另有 A/B 接觸偵測，偵測到跨手臂接觸會立即暫停。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
 
-## 5. 操作方式
+啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
-模型載入後：
-
-- 按 `Space`：開始或暫停模擬
-- 滑鼠左鍵拖曳：旋轉視角
-- 滑鼠右鍵拖曳：平移視角
-- 滾輪：縮放
-
-場景包含一個地面與一個可自由落下的紅色方塊，可作為後續雙臂機器人、工料搬運與碰撞測試的基礎。
+演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。
