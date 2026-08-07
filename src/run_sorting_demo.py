@@ -47,6 +47,9 @@ PICK_HEIGHT_M = 0.20
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
+GRASP_XY_TOLERANCE_M = 0.055
+EXPECTED_OBJECT_BELOW_GRASP_M = 0.080
+GRASP_Z_TOLERANCE_M = 0.030
 
 
 @dataclass
@@ -80,6 +83,8 @@ class ArmMission:
     keyframe_index: int = 0
     keyframe_started_s: float = 0.0
     attached: bool = False
+    attachment_local_xyz: np.ndarray | None = None
+    failed: bool = False
 
     @property
     def done(self) -> bool:
@@ -98,6 +103,7 @@ class ArmKinematics:
         self.qpos_addresses = model.jnt_qposadr[self.joint_ids]
         self.dof_addresses = model.jnt_dofadr[self.joint_ids]
         self.tool_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}_tool0")
+        self.grasp_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"{prefix}_grasp_zone")
         self.finger_qpos_addresses = np.array([
             model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{side}_finger_slide")]
             for side in ("left", "right")
@@ -107,17 +113,20 @@ class ArmKinematics:
     def tool_position(self) -> np.ndarray:
         return self.data.site_xpos[self.tool_site_id].copy()
 
+    def grasp_position(self) -> np.ndarray:
+        return self.data.site_xpos[self.grasp_site_id].copy()
+
     def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray) -> np.ndarray:
         """Damped least-squares position IK, bounded by each Nova5 joint range."""
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
         for _ in range(260):
             mujoco.mj_forward(self.model, self.data)
-            error = target_xyz - self.tool_position()
+            error = target_xyz - self.grasp_position()
             if np.linalg.norm(error) < 0.012:
                 break
             jacobian = np.zeros((3, self.model.nv))
-            mujoco.mj_jacSite(self.model, self.data, jacobian, None, self.tool_site_id)
+            mujoco.mj_jacSite(self.model, self.data, jacobian, None, self.grasp_site_id)
             selected = jacobian[:, self.dof_addresses]
             step = selected.T @ np.linalg.solve(selected @ selected.T + 0.035 * np.eye(3), error)
             step *= min(1.0, 0.16 / max(np.linalg.norm(step), 1e-9))
@@ -150,7 +159,6 @@ def make_demo_items(seed: int) -> list[DemoItem]:
         DemoItem("part_01", ObjectClass.MIDDLE, 0.2, (0.0 + jitter(0.03), 1.02, 0.13), 4.35),
         DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.18 + jitter(0.03), 0.92, 0.13), 4.75),
         DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.18 + jitter(0.03), 1.22, 0.13), 4.85),
-        DemoItem("part_04", ObjectClass.MIDDLE, 7.0, (0.0 + jitter(0.03), 1.38, 0.13), 4.55),
     ]
 
 
@@ -294,6 +302,10 @@ class SortingDemo:
         kin = self.kinematics[arm]
         qpos_address = self.qpos_addresses[object_id]
         pick_xyz = self.data.qpos[qpos_address : qpos_address + 3].copy()
+        # The part continues moving while the arm approaches, descends, and closes.
+        # Aim at this predicted belt position instead of the stale observation.
+        time_to_close_s = 1.15 + 0.70 + 0.40
+        pick_xyz[1] -= self.parameters.belt_speed_mps * time_to_close_s
         pick_xyz[2] = PICK_HEIGHT_M
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
@@ -363,29 +375,62 @@ class SortingDemo:
             elapsed = self.data.time - mission.keyframe_started_s
             current = self.data.qpos[kin.qpos_addresses].copy()
             kin.set_joint_pose(interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S))), opening)
-            if stage == "lift" and not mission.attached:
-                mission.attached = True
-                self._log("grasp", object_id=mission.object_id, arm=arm.value)
+            if stage == "close" and elapsed >= duration and not mission.attached:
+                if not self._confirm_grasp(arm, mission):
+                    continue
             if mission.attached:
                 object_address = self.qpos_addresses[mission.object_id]
-                tool_xyz = kin.tool_position()
-                self.data.qpos[object_address : object_address + 7] = (*tool_xyz, 1.0, 0.0, 0.0, 0.0)
+                grasp_xyz = kin.grasp_position()
+                grasp_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3)
+                object_xyz = grasp_xyz + grasp_xmat @ mission.attachment_local_xyz
+                self.data.qpos[object_address : object_address + 7] = (*object_xyz, 1.0, 0.0, 0.0, 0.0)
                 self.data.qvel[object_address : object_address + 6] = 0.0
             if elapsed < duration:
                 continue
             if stage == "open" and mission.attached:
                 mission.attached = False
                 object_address = self.qpos_addresses[mission.object_id]
-                tool_xyz = kin.tool_position()
-                self.locked_positions[mission.object_id] = tool_xyz.copy()
-                self.data.qpos[object_address : object_address + 7] = (*tool_xyz, 1.0, 0.0, 0.0, 0.0)
+                grasp_xyz = kin.grasp_position()
+                self.locked_positions[mission.object_id] = grasp_xyz.copy()
+                self.data.qpos[object_address : object_address + 7] = (*grasp_xyz, 1.0, 0.0, 0.0, 0.0)
                 self._log("place", object_id=mission.object_id, placement=mission.placement_zone)
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
             if mission.done:
                 self.missions.pop(arm)
-                self.placed.add(mission.object_id)
+                if not mission.failed:
+                    self.placed.add(mission.object_id)
                 self.coordinator.mark_completed(mission.object_id)
+
+    def _confirm_grasp(self, arm: ArmId, mission: ArmMission) -> bool:
+        """Attach only when the closing gripper physically reaches the free part."""
+        kin = self.kinematics[arm]
+        object_address = self.qpos_addresses[mission.object_id]
+        object_xyz = self.data.qpos[object_address : object_address + 3].copy()
+        grasp_xyz = kin.grasp_position()
+        delta = object_xyz - grasp_xyz
+        xy_error = float(np.linalg.norm(delta[:2]))
+        z_alignment_error = abs(float(delta[2]) + EXPECTED_OBJECT_BELOW_GRASP_M)
+        if xy_error <= GRASP_XY_TOLERANCE_M and z_alignment_error <= GRASP_Z_TOLERANCE_M:
+            grasp_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3)
+            mission.attachment_local_xyz = grasp_xmat.T @ delta
+            mission.attached = True
+            self._log("grasp", object_id=mission.object_id, arm=arm.value, xy_error_m=round(xy_error, 4))
+            return True
+        self.missed.add(mission.object_id)
+        self.coordinator.mark_completed(mission.object_id)
+        self._log(
+            "missed",
+            object_id=mission.object_id,
+            reason="grasp_alignment",
+            xy_error_m=round(xy_error, 4),
+            z_alignment_error_m=round(z_alignment_error, 4),
+        )
+        mission.failed = True
+        mission.keyframes = [("recover", 0.6, self.data.qpos[kin.qpos_addresses].copy(), 0.035), ("home", 1.0, kin.home_qpos, 0.035)]
+        mission.keyframe_index = 0
+        mission.keyframe_started_s = self.data.time
+        return False
 
     def step(self) -> None:
         with self.state_lock:

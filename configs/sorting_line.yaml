@@ -45,8 +45,8 @@ output_trays:
 demo:
   runner: src/run_sorting_demo.py
   default_seed: 42
-  item_count: 4
-  classes: [middle, right, left, middle]
+  item_count: 3
+  classes: [middle, right, left]
   grasp_model: position_ik_with_kinematic_attachment
   motion_sequence: [approach, descend, close, lift, transfer, lower, open, retreat, home]
 
