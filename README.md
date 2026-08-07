@@ -35,6 +35,8 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 
 `src/run_sorting_demo.py` 是建置展示用的少量投料場景。固定 seed 會產生 3 件 `MIDDLE / RIGHT / LEFT` 物件，中央協調器會先安排共享區與專屬區任務，再讓兩台 Nova5 以位置 IK 執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。附著只會在夾爪中心與物件通過實測對位門檻後建立，並保留抓取當刻的相對位移；這比直接傳送物件更接近物理抓取，但仍和後續純接觸摩擦抓取驗證分開。
 
+目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。若另一手臂正在中央走廊的接近、下降、閉合或抬升階段，`MIDDLE` 任務會先保持預約並在控制台顯示「安全等待」，等中央走廊淨空才啟動；MuJoCo 另有 A/B 接觸偵測，偵測到跨手臂接觸會立即暫停。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
+
 啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
 演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。

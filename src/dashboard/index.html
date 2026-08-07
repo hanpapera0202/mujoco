@@ -23,6 +23,15 @@
         <label>隨機種子 Seed<input name="seed" type="number" step="1" required></label>
         <label>演示速度<input name="simulation_speed" type="number" min="0.1" max="4" step="0.1" required></label>
         <label>皮帶速度 (m/s)<input name="belt_speed_mps" type="number" min="0.02" max="0.5" step="0.01" required></label>
+        <h1>演算法</h1>
+        <label>協調方法
+          <select name="algorithm" id="algorithm">
+            <option value="cspr">CSPR：集中式時空預約</option>
+            <option value="deadline_first" disabled>Deadline-first：即將支援</option>
+            <option value="hungarian" disabled>Hungarian：即將支援</option>
+            <option value="fuzzy" disabled>Fuzzy：即將支援</option>
+          </select>
+        </label>
         <h1>中央協調器</h1>
         <label>滾動視窗 (s)<input name="horizon_s" type="number" min="0.5" max="15" step="0.1" required></label>
         <label>雙臂並行加分<input name="parallel_bonus" type="number" min="0.1" max="20" step="0.1" required></label>
@@ -40,7 +49,8 @@
         <div><span>已放置</span><strong id="placed">0</strong></div>
         <div><span>漏件</span><strong id="missed">0</strong></div>
       </div>
-      <section class="panel"><h2>手臂任務</h2><div id="missions" class="rows"></div></section>
+      <section class="panel"><h2>手臂任務</h2><div id="missions" class="rows"></div><p id="deferred"></p></section>
+      <section class="panel"><h2>目前演算法</h2><div id="algorithm-name"></div></section>
       <section class="panel"><h2>最新中央派工</h2><div id="assignments" class="rows"></div><details><summary>拒絕候選</summary><pre id="rejected"></pre></details></section>
       <section class="panel"><h2>事件紀錄</h2><ol id="events"></ol></section>
       <p class="hint">關閉此網頁不會停止演示。重新開啟 <code>http://127.0.0.1:8765</code> 即可；MuJoCo 視窗按 <kbd>R</kbd> 也能重播。</p>

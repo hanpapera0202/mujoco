@@ -43,13 +43,14 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
-PICK_HEIGHT_M = 0.20
+PICK_HEIGHT_M = 0.23
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
 GRASP_XY_TOLERANCE_M = 0.055
-EXPECTED_OBJECT_BELOW_GRASP_M = 0.080
+EXPECTED_OBJECT_BELOW_GRASP_M = 0.110
 GRASP_Z_TOLERANCE_M = 0.030
+CENTRAL_CORRIDOR_BLOCKING_STAGES = {"approach", "descend", "close", "lift"}
 
 
 @dataclass
@@ -63,6 +64,10 @@ class DemoParameters:
     travel_weight: float = 0.25
     belt_speed_mps: float = BELT_SPEED_MPS
     simulation_speed: float = 1.0
+
+
+CSPR_ALGORITHM_ID = "cspr"
+CSPR_ALGORITHM_NAME = "CSPR - Centralized Spatiotemporal Reservation"
 
 
 @dataclass(frozen=True)
@@ -157,8 +162,8 @@ def make_demo_items(seed: int) -> list[DemoItem]:
     jitter = lambda amount: rng.uniform(-amount, amount)
     return [
         DemoItem("part_01", ObjectClass.MIDDLE, 0.2, (0.0 + jitter(0.03), 1.02, 0.13), 4.35),
-        DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.18 + jitter(0.03), 0.92, 0.13), 4.75),
-        DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.18 + jitter(0.03), 1.22, 0.13), 4.85),
+        DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.28 + jitter(0.03), 0.92, 0.13), 4.75),
+        DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.28 + jitter(0.03), 1.22, 0.13), 4.85),
     ]
 
 
@@ -173,6 +178,7 @@ class SortingDemo:
         self.model.opt.timestep = CONTROL_STEP_S
         self.data = mujoco.MjData(self.model)
         self.seed = seed
+        self.algorithm_id = CSPR_ALGORITHM_ID
         self.parameters = parameters or DemoParameters()
         self.state_lock = threading.RLock()
         self.reset_requested = threading.Event()
@@ -200,6 +206,7 @@ class SortingDemo:
             travel_weight=self.parameters.travel_weight,
         )
         self.missions: dict[ArmId, ArmMission] = {}
+        self.deferred_assignments = {}
         self.spawned: set[str] = set()
         self.placed: set[str] = set()
         self.missed: set[str] = set()
@@ -223,6 +230,11 @@ class SortingDemo:
     def update_settings(self, values: dict[str, object]) -> None:
         """Apply validated dashboard settings at the next deterministic restart."""
         with self.state_lock:
+            if "algorithm" in values:
+                algorithm_id = str(values["algorithm"])
+                if algorithm_id != CSPR_ALGORITHM_ID:
+                    raise ValueError("This algorithm is reserved for a future implementation")
+                self.algorithm_id = algorithm_id
             if "seed" in values:
                 self.seed = int(values["seed"])
             for field_name in asdict(self.parameters):
@@ -255,11 +267,13 @@ class SortingDemo:
             }
             return {
                 "seed": self.seed,
+                "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
                 "time_s": round(float(self.data.time), 3),
                 "paused": self.paused,
                 "parameters": asdict(self.parameters),
                 "counts": {"spawned": len(self.spawned), "placed": len(self.placed), "missed": len(self.missed)},
                 "missions": missions,
+                "deferred": [item.object_id for item in self.deferred_assignments.values()],
                 "decision": self.latest_decision,
                 "events": self.event_log[-12:],
             }
@@ -268,6 +282,16 @@ class SortingDemo:
         entry = {"time_s": round(float(self.data.time), 3), "event": event, **fields}
         self.event_log.append(entry)
         print(f"[{self.data.time:5.2f}s] {event.upper()} " + " ".join(f"{key}={value}" for key, value in fields.items()))
+
+    def _inter_arm_contacts(self) -> list[tuple[str, str]]:
+        contacts: list[tuple[str, str]] = []
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            first = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1) or str(contact.geom1)
+            second = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or str(contact.geom2)
+            if (first.startswith("A_") and second.startswith("B_")) or (first.startswith("B_") and second.startswith("A_")):
+                contacts.append((first, second))
+        return contacts
 
     def _update_belt(self) -> None:
         travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
@@ -278,7 +302,7 @@ class SortingDemo:
 
     def _tool_arm_states(self) -> tuple[ArmState, ArmState]:
         return tuple(
-            ArmState(arm, tuple(self.kinematics[arm].tool_position()), 1.55, 999.0 if arm in self.missions else 0.0)
+            ArmState(arm, tuple(self.kinematics[arm].tool_position()), 1.55, 999.0 if arm in self.missions or arm in self.deferred_assignments else 0.0)
             for arm in ArmId
         )
 
@@ -346,6 +370,7 @@ class SortingDemo:
         if self.data.time - self.last_schedule_s < SCHEDULER_PERIOD_S:
             return
         self.last_schedule_s = self.data.time
+        self._start_safe_deferred_assignments()
         decision = self.coordinator.decide(self.data.time, self._available_observations(), self._tool_arm_states())
         if decision.assignments:
             self.latest_decision = {
@@ -364,9 +389,31 @@ class SortingDemo:
                 "rejected": decision.rejected,
             }
         for assignment in decision.assignments:
-            mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
-            self.missions[assignment.arm] = mission
-            self._log("assign", object_id=assignment.object_id, arm=assignment.arm.value, placement=assignment.placement_zone)
+            if self._may_enter_assignment(assignment):
+                self._start_assignment(assignment)
+            else:
+                self.deferred_assignments[assignment.arm] = assignment
+                self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="central_corridor")
+
+    def _may_enter_assignment(self, assignment) -> bool:
+        if assignment.object_class is not ObjectClass.MIDDLE:
+            return True
+        return all(
+            mission.keyframes[mission.keyframe_index][0] not in CENTRAL_CORRIDOR_BLOCKING_STAGES
+            for arm, mission in self.missions.items()
+            if arm is not assignment.arm
+        )
+
+    def _start_safe_deferred_assignments(self) -> None:
+        for arm, assignment in list(self.deferred_assignments.items()):
+            if arm not in self.missions and self._may_enter_assignment(assignment):
+                self.deferred_assignments.pop(arm)
+                self._start_assignment(assignment)
+
+    def _start_assignment(self, assignment) -> None:
+        mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
+        self.missions[assignment.arm] = mission
+        self._log("assign", object_id=assignment.object_id, arm=assignment.arm.value, placement=assignment.placement_zone)
 
     def _update_missions(self) -> None:
         for arm, mission in list(self.missions.items()):
@@ -448,9 +495,13 @@ class SortingDemo:
                 self.data.qvel[address : address + 6] = 0.0
             mujoco.mj_forward(self.model, self.data)
             mujoco.mj_step(self.model, self.data)
+            contacts = self._inter_arm_contacts()
+            if contacts and not self.paused:
+                self.paused = True
+                self._log("safety_stop", reason="inter_arm_contact", contact=contacts[0])
 
     def run_headless(self, duration_s: float) -> None:
-        while self.data.time < duration_s:
+        while self.data.time < duration_s and not self.paused:
             self.step()
         print(f"finished: placed={sorted(self.placed)} missed={sorted(self.missed)}")
 

@@ -49,6 +49,12 @@ demo:
   classes: [middle, right, left]
   grasp_model: position_ik_with_kinematic_attachment
   motion_sequence: [approach, descend, close, lift, transfer, lower, open, retreat, home]
+  exclusive_spawn_x_m: {left: -0.28, right: 0.28}
+  pick_height_m: 0.23
+  grasp_xy_tolerance_m: 0.055
+  central_corridor_blocking_stages: [approach, descend, close, lift]
+  active_algorithm: cspr
+  algorithm_options: [cspr, deadline_first, hungarian, fuzzy]
 
 control_contract:
   perception: [part_id, class, pose_xyzquat, confidence]
