@@ -24,3 +24,5 @@ Desktop.ini
 # MuJoCo-generated files
 *.mjb
 screenshots/
+# Reproducible benchmark outputs are generated locally.
+results/
