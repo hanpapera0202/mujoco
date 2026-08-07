@@ -42,7 +42,7 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
-PICK_HEIGHT_M = 0.16
+PICK_HEIGHT_M = 0.19
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
@@ -51,14 +51,14 @@ GRASP_XY_TOLERANCE_M = 0.055
 
 @dataclass
 class DemoParameters:
-    horizon_s: float = 5.0
+    horizon_s: float = 8.0
     parallel_bonus: float = 2.0
     pick_speed_mps: float = 0.55
     fixed_cycle_s: float = 1.1
     urgency_weight: float = 3.0
     success_weight: float = 2.0
     travel_weight: float = 0.25
-    belt_speed_mps: float = BELT_SPEED_MPS
+    belt_speed_mps: float = 0.24
     simulation_speed: float = 1.0
 
 
@@ -85,6 +85,8 @@ class ArmMission:
     keyframe_index: int = 0
     keyframe_started_s: float = 0.0
     next_replan_s: float = 0.0
+    last_safety_hold_s: float = -1.0
+    last_safe_qpos: np.ndarray | None = None
     grasped: bool = False
     grasp_equality_id: int | None = None
     failed: bool = False
@@ -171,14 +173,15 @@ def place_part(data: mujoco.MjData, qpos_address: int, xyz: tuple[float, float, 
 
 
 def make_demo_items(seed: int) -> list[DemoItem]:
-    """Small, repeatable workload: a contested middle part plus exclusive work."""
+    """Ten deterministic moving parts with mixed exclusive and shared work."""
     rng = random.Random(seed)
-    jitter = lambda amount: rng.uniform(-amount, amount)
-    return [
-        DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.12 + jitter(0.02), 0.88, 0.13), 4.75),
-        DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.12 + jitter(0.02), 1.20, 0.13), 4.85),
-        DemoItem("part_01", ObjectClass.MIDDLE, 8.0, (0.0 + jitter(0.03), 1.22, 0.13), 7.50),
-    ]
+    classes = (ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT)
+    items: list[DemoItem] = []
+    for index, object_class in enumerate(classes, start=1):
+        center_x = {ObjectClass.LEFT: -0.12, ObjectClass.MIDDLE: 0.0, ObjectClass.RIGHT: 0.12}[object_class]
+        spawn_time_s = 0.2 if index <= 2 else 0.2 + (index - 2) * 0.55
+        items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), 1.20, 0.13), 8.0))
+    return items
 
 
 def interpolate(first: np.ndarray, second: np.ndarray, ratio: float) -> np.ndarray:
@@ -224,7 +227,7 @@ class SortingDemo:
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
         self.grasp_equality_ids = {
             (arm, part): mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, f"{arm.value}_{part}_grasp")
-            for arm in ArmId for part in ("part_01", "part_02", "part_03")
+            for arm in ArmId for part in (f"part_{index:02d}" for index in range(1, 11))
         }
         self.data.eq_active[:] = False
         for kin in self.kinematics.values():
@@ -377,6 +380,16 @@ class SortingDemo:
             previous = target
         return True, "clear"
 
+    def _pose_is_safe(self, arm: ArmId, qpos: np.ndarray, gripper_opening: float | None = None) -> bool:
+        kin = self.kinematics[arm]
+        trial = mujoco.MjData(self.model)
+        trial.qpos[:] = self.data.qpos
+        trial.qpos[kin.qpos_addresses] = qpos
+        if gripper_opening is not None:
+            trial.qpos[kin.finger_qpos_addresses] = gripper_opening
+        mujoco.mj_forward(self.model, trial)
+        return not self._forbidden_contacts(trial)
+
     def _update_belt(self) -> None:
         travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
         phase_pitch = CONVEYOR_LOOP_LENGTH_M / SEGMENT_COUNT
@@ -461,6 +474,7 @@ class SortingDemo:
             intercept_close_s,
             keyframe_started_s=self.data.time,
             next_replan_s=self.data.time + 0.12,
+            last_safe_qpos=self.data.qpos[kin.qpos_addresses].copy(),
         )
 
     def _refresh_intercept(self, mission: ArmMission) -> None:
@@ -474,6 +488,9 @@ class SortingDemo:
         start = self.data.qpos[kin.qpos_addresses].copy()
         q_pregrasp = kin.solve_position_ik(pregrasp, start)
         q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp)
+        if not self._pose_is_safe(mission.arm, q_pregrasp) or not self._pose_is_safe(mission.arm, q_pick):
+            mission.next_replan_s = self.data.time + 0.12
+            return
         mission.keyframes[0] = ("approach", 1.15, q_pregrasp, 0.035)
         mission.keyframes[1] = ("descend", 0.70, q_pick, 0.035)
         mission.keyframes[2] = ("close", 0.40, q_pick, 0.0)
@@ -543,7 +560,20 @@ class SortingDemo:
             stage, duration, target, opening = mission.keyframes[mission.keyframe_index]
             elapsed = self.data.time - mission.keyframe_started_s
             current = self.data.qpos[kin.qpos_addresses].copy()
-            kin.command_joint_pose(interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S))), opening)
+            if not self._pose_is_safe(arm, current, opening):
+                if mission.last_safe_qpos is not None:
+                    kin.command_joint_pose(mission.last_safe_qpos, opening)
+                mission.keyframe_started_s += CONTROL_STEP_S
+                continue
+            next_qpos = interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S)))
+            if not self._pose_is_safe(arm, next_qpos, opening):
+                mission.keyframe_started_s += CONTROL_STEP_S
+                if self.data.time - mission.last_safety_hold_s >= 0.5:
+                    mission.last_safety_hold_s = self.data.time
+                    self._log("reserve_wait", object_id=mission.object_id, arm=arm.value, reason="step_collision_guard")
+                continue
+            kin.command_joint_pose(next_qpos, opening)
+            mission.last_safe_qpos = next_qpos.copy()
             if stage == "close" and elapsed >= duration and not mission.grasped:
                 if not self._confirm_grasp(arm, mission):
                     continue
@@ -629,8 +659,37 @@ class SortingDemo:
             mujoco.mj_step(self.model, self.data)
             contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
-                self.paused = True
-                self._log("safety_stop", reason="forbidden_contact", contact=contacts[0])
+                self._recover_last_safe_poses()
+                mujoco.mj_forward(self.model, self.data)
+                remaining_contacts = self._forbidden_contacts(self.data)
+                if remaining_contacts:
+                    self._abort_unsafe_missions(remaining_contacts)
+                    mujoco.mj_forward(self.model, self.data)
+                    if self._forbidden_contacts(self.data):
+                        self.paused = True
+                        self._log("safety_stop", reason="unrecoverable_forbidden_contact", contact=remaining_contacts[0])
+                else:
+                    self._log("safety_recover", reason="rollback_last_safe_pose", contact=contacts[0])
+
+    def _recover_last_safe_poses(self) -> None:
+        for arm, mission in self.missions.items():
+            if mission.last_safe_qpos is None:
+                continue
+            _, _, _, opening = mission.keyframes[mission.keyframe_index]
+            self.kinematics[arm].command_joint_pose(mission.last_safe_qpos, opening)
+
+    def _abort_unsafe_missions(self, contacts: list[tuple[str, str]]) -> None:
+        unsafe_arms = {arm for pair in contacts for arm in (self._arm_for_description(pair[0]), self._arm_for_description(pair[1])) if arm is not None}
+        for arm in unsafe_arms:
+            mission = self.missions.pop(arm, None)
+            if mission is None:
+                continue
+            if mission.grasp_equality_id is not None:
+                self.data.eq_active[mission.grasp_equality_id] = False
+            self.kinematics[arm].command_joint_pose(self.kinematics[arm].home_qpos, 0.035)
+            self.missed.add(mission.object_id)
+            self.coordinator.mark_completed(mission.object_id)
+            self._log("safety_recover", object_id=mission.object_id, arm=arm.value, reason="abort_and_retract", contact=contacts[0])
 
     def run_headless(self, duration_s: float) -> None:
         while self.data.time < duration_s and not self.paused:

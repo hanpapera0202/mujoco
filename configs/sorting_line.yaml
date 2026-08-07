@@ -10,7 +10,7 @@ conveyor:
   segment_length_m: 0.74
   active_loop_length_m: 5.18
   segment_overlap_m: 0.0925
-  belt_speed_mps: 0.18
+  belt_speed_mps: 0.24
   upstream_spawn_y_range_m: [2.20, 2.32]
   upstream_spawn_z_m: 0.49
   tail_exit_y_m: -2.25

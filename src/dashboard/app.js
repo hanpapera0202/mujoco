@@ -3,7 +3,7 @@ const algorithmSelect = document.querySelector('#algorithm');
 let initialized = false;
 const zh = {
   approach: '接近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', retreat: '撤離', home: '回原位',
-  infeed: '投料', assign: '派工', reserve_wait: '安全等待', grasp: '抓取', release: '鬆開', place: '放置', missed: '漏件', safety_stop: '安全停止',
+  infeed: '投料', assign: '派工', reserve_wait: '安全等待', grasp: '抓取', release: '鬆開', place: '放置', missed: '漏件', safety_recover: '安全回復', safety_stop: '安全停止',
   left_bin: '左側托盤', right_bin: '右側托盤', shared_middle: '共享中間區', exclusive_left: '左側專屬區', exclusive_right: '右側專屬區',
   middle: '中間件', left: '左側件', right: '右側件', tail_exit: '尾端離開'
 };
