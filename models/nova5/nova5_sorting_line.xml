@@ -198,11 +198,11 @@
                     <geom name="A_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="8" conaffinity="53" mass="0.04"/>
                     <body name="A_left_finger" pos="-0.028 0 -0.055">
                       <joint name="A_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="A_left_finger_pad" type="box" size="0.012 0.060 0.018" material="finger_mat" contype="8" conaffinity="53" mass="0.025" friction="1.8 0.02 0.001"/>
+                      <geom name="A_left_finger_pad" type="box" size="0.012 0.080 0.018" material="finger_mat" contype="8" conaffinity="53" mass="0.025" friction="1.8 0.02 0.001"/>
                     </body>
                     <body name="A_right_finger" pos="0.028 0 -0.055">
                       <joint name="A_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="A_right_finger_pad" type="box" size="0.012 0.060 0.018" material="finger_mat" contype="8" conaffinity="53" mass="0.025" friction="1.8 0.02 0.001"/>
+                      <geom name="A_right_finger_pad" type="box" size="0.012 0.080 0.018" material="finger_mat" contype="8" conaffinity="53" mass="0.025" friction="1.8 0.02 0.001"/>
                     </body>
                     <site name="A_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
                     <site name="A_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>
@@ -250,11 +250,11 @@
                     <geom name="B_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="16" conaffinity="43" mass="0.04"/>
                     <body name="B_left_finger" pos="-0.028 0 -0.055">
                       <joint name="B_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="B_left_finger_pad" type="box" size="0.012 0.060 0.018" material="finger_mat" contype="16" conaffinity="43" mass="0.025" friction="1.8 0.02 0.001"/>
+                      <geom name="B_left_finger_pad" type="box" size="0.012 0.080 0.018" material="finger_mat" contype="16" conaffinity="43" mass="0.025" friction="1.8 0.02 0.001"/>
                     </body>
                     <body name="B_right_finger" pos="0.028 0 -0.055">
                       <joint name="B_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="B_right_finger_pad" type="box" size="0.012 0.060 0.018" material="finger_mat" contype="16" conaffinity="43" mass="0.025" friction="1.8 0.02 0.001"/>
+                      <geom name="B_right_finger_pad" type="box" size="0.012 0.080 0.018" material="finger_mat" contype="16" conaffinity="43" mass="0.025" friction="1.8 0.02 0.001"/>
                     </body>
                     <site name="B_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
                     <site name="B_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>

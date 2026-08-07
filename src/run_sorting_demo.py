@@ -42,7 +42,7 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
-PICK_HEIGHT_M = 0.19
+PICK_HEIGHT_M = 0.20
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.19
@@ -64,6 +64,8 @@ class DemoParameters:
 
 CSPR_ALGORITHM_ID = "cspr"
 CSPR_ALGORITHM_NAME = "CSPR - Centralized Spatiotemporal Reservation"
+# Tool x: jaw closing direction, y: vertical finger length, z: conveyor approach.
+GRASP_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
 
 
 @dataclass(frozen=True)
@@ -134,19 +136,23 @@ class ArmKinematics:
         return self.data.site_xpos[self.grasp_site_id].copy()
 
     def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray) -> np.ndarray:
-        """Damped least-squares position IK, bounded by each Nova5 joint range."""
+        """Damped 6D IK with a fixed, conveyor-facing parallel-gripper pose."""
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
-        for _ in range(260):
+        for _ in range(360):
             mujoco.mj_forward(self.model, self.data)
-            error = target_xyz - self.grasp_position()
-            if np.linalg.norm(error) < 0.012:
+            current_xmat = self.data.site_xmat[self.grasp_site_id].reshape(3, 3)
+            position_error = target_xyz - self.grasp_position()
+            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], GRASP_XMAT[:, index]) for index in range(3))
+            error = np.concatenate((position_error, 0.28 * rotation_error))
+            if np.linalg.norm(position_error) < 0.012 and np.linalg.norm(rotation_error) < 0.05:
                 break
-            jacobian = np.zeros((3, self.model.nv))
-            mujoco.mj_jacSite(self.model, self.data, jacobian, None, self.grasp_site_id)
-            selected = jacobian[:, self.dof_addresses]
-            step = selected.T @ np.linalg.solve(selected @ selected.T + 0.035 * np.eye(3), error)
-            step *= min(1.0, 0.16 / max(np.linalg.norm(step), 1e-9))
+            position_jacobian = np.zeros((3, self.model.nv))
+            rotation_jacobian = np.zeros((3, self.model.nv))
+            mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
+            selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
+            step = selected.T @ np.linalg.solve(selected @ selected.T + 0.045 * np.eye(6), error)
+            step *= min(1.0, 0.11 / max(np.linalg.norm(step), 1e-9))
             updated = self.data.qpos[self.qpos_addresses] + step
             for index, joint_id in enumerate(self.joint_ids):
                 low, high = self.model.jnt_range[joint_id]
@@ -560,13 +566,14 @@ class SortingDemo:
             stage, duration, target, opening = mission.keyframes[mission.keyframe_index]
             elapsed = self.data.time - mission.keyframe_started_s
             current = self.data.qpos[kin.qpos_addresses].copy()
-            if not self._pose_is_safe(arm, current, opening):
+            require_clearance = stage != "close"
+            if require_clearance and not self._pose_is_safe(arm, current, opening):
                 if mission.last_safe_qpos is not None:
                     kin.command_joint_pose(mission.last_safe_qpos, opening)
                 mission.keyframe_started_s += CONTROL_STEP_S
                 continue
             next_qpos = interpolate(current, target, min(1.0, CONTROL_STEP_S / max(duration - elapsed, CONTROL_STEP_S)))
-            if not self._pose_is_safe(arm, next_qpos, opening):
+            if require_clearance and not self._pose_is_safe(arm, next_qpos, opening):
                 mission.keyframe_started_s += CONTROL_STEP_S
                 if self.data.time - mission.last_safety_hold_s >= 0.5:
                     mission.last_safety_hold_s = self.data.time
