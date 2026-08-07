@@ -298,6 +298,16 @@
     <exclude body1="conveyor_frame" body2="belt_segment_08"/>
   </contact>
 
+  <!-- Activated only after a verified finger-to-part contact. -->
+  <equality>
+    <weld name="A_part_01_grasp" body1="A_gripper" body2="part_01" active="false" solref="0.01 1"/>
+    <weld name="A_part_02_grasp" body1="A_gripper" body2="part_02" active="false" solref="0.01 1"/>
+    <weld name="A_part_03_grasp" body1="A_gripper" body2="part_03" active="false" solref="0.01 1"/>
+    <weld name="B_part_01_grasp" body1="B_gripper" body2="part_01" active="false" solref="0.01 1"/>
+    <weld name="B_part_02_grasp" body1="B_gripper" body2="part_02" active="false" solref="0.01 1"/>
+    <weld name="B_part_03_grasp" body1="B_gripper" body2="part_03" active="false" solref="0.01 1"/>
+  </equality>
+
   <actuator>
     <position name="A_joint1_position" joint="A_joint1" kp="120" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
     <position name="A_joint2_position" joint="A_joint2" kp="160" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-120 120"/>

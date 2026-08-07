@@ -86,6 +86,7 @@ class ArmMission:
     keyframe_started_s: float = 0.0
     next_replan_s: float = 0.0
     grasped: bool = False
+    grasp_equality_id: int | None = None
     failed: bool = False
 
     @property
@@ -174,14 +175,25 @@ def make_demo_items(seed: int) -> list[DemoItem]:
     rng = random.Random(seed)
     jitter = lambda amount: rng.uniform(-amount, amount)
     return [
-        DemoItem("part_01", ObjectClass.MIDDLE, 0.2, (0.0 + jitter(0.03), 1.02, 0.13), 4.35),
-        DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.28 + jitter(0.03), 0.92, 0.13), 4.75),
+        DemoItem("part_02", ObjectClass.RIGHT, 0.2, (0.12 + jitter(0.02), 0.88, 0.13), 4.75),
+        DemoItem("part_03", ObjectClass.LEFT, 0.2, (-0.12 + jitter(0.02), 1.20, 0.13), 4.85),
+        DemoItem("part_01", ObjectClass.MIDDLE, 8.0, (0.0 + jitter(0.03), 1.22, 0.13), 7.50),
     ]
 
 
 def interpolate(first: np.ndarray, second: np.ndarray, ratio: float) -> np.ndarray:
     ratio = min(1.0, max(0.0, ratio))
     return first + (second - first) * ratio
+
+
+def quaternion_multiply(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    aw, ax, ay, az = first
+    bw, bx, by, bz = second
+    return np.array((aw * bw - ax * bx - ay * by - az * bz, aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx, aw * bz + ax * by - ay * bx + az * bw))
+
+
+def quaternion_rotate(quaternion: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    return quaternion_multiply(quaternion_multiply(quaternion, np.array((0.0, *vector))), np.array((quaternion[0], -quaternion[1], -quaternion[2], -quaternion[3])))[1:]
 
 
 class SortingDemo:
@@ -210,6 +222,11 @@ class SortingDemo:
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
+        self.grasp_equality_ids = {
+            (arm, part): mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, f"{arm.value}_{part}_grasp")
+            for arm in ArmId for part in ("part_01", "part_02", "part_03")
+        }
+        self.data.eq_active[:] = False
         for kin in self.kinematics.values():
             kin.command_joint_pose(kin.home_qpos, 0.035)
         self.coordinator = CentralCoordinator(
@@ -533,6 +550,7 @@ class SortingDemo:
             if elapsed < duration:
                 continue
             if stage == "open" and mission.grasped:
+                self.data.eq_active[mission.grasp_equality_id] = False
                 self._log("release", object_id=mission.object_id, placement=mission.placement_zone)
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
@@ -559,7 +577,8 @@ class SortingDemo:
                 touching_fingers.update(kin.finger_geom_ids.intersection(pair))
         if touching_fingers:
             mission.grasped = True
-            self._log("grasp", object_id=mission.object_id, arm=arm.value, contact="finger_physical", finger_count=len(touching_fingers))
+            mission.grasp_equality_id = self._activate_grasp_constraint(arm, mission.object_id)
+            self._log("grasp", object_id=mission.object_id, arm=arm.value, contact="finger_physical", finger_count=len(touching_fingers), grasp_constraint="active")
             return True
         self.missed.add(mission.object_id)
         self.coordinator.mark_completed(mission.object_id)
@@ -573,6 +592,21 @@ class SortingDemo:
         mission.keyframe_index = 0
         mission.keyframe_started_s = self.data.time
         return False
+
+    def _activate_grasp_constraint(self, arm: ArmId, object_id: str) -> int:
+        """Hold the current contact pose with a MuJoCo weld; never teleport the part."""
+        equality_id = self.grasp_equality_ids[(arm, object_id)]
+        gripper_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f"{arm.value}_gripper")
+        part_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, object_id)
+        gripper_pos = self.data.xpos[gripper_id]
+        gripper_quat = self.data.xquat[gripper_id]
+        part_pos = self.data.xpos[part_id]
+        part_quat = self.data.xquat[part_id]
+        inverse_gripper = np.array((gripper_quat[0], -gripper_quat[1], -gripper_quat[2], -gripper_quat[3]))
+        self.model.eq_data[equality_id, :3] = quaternion_rotate(inverse_gripper, part_pos - gripper_pos)
+        self.model.eq_data[equality_id, 3:7] = quaternion_multiply(inverse_gripper, part_quat)
+        self.data.eq_active[equality_id] = True
+        return equality_id
 
     def _part_is_in_target_bin(self, object_id: str, placement_zone: str) -> bool:
         drop_site = "left_bin_drop" if placement_zone == "left_bin" else "right_bin_drop"

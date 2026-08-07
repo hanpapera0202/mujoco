@@ -95,4 +95,4 @@ MuJoCo 執行層再加入中央走廊門檻。若另一手臂正處於 `approach
 
 ## 7. 與 MuJoCo 的界線
 
-演示器的 IK、路徑碰撞預檢與接觸式抓取位於 [run_sorting_demo.py](../src/run_sorting_demo.py)。它以固定 seed 驗證中央端的任務序列、共享區保留與輸出托盤路由。工件不使用運動學附著；`q_(a,o)`、`eta(a,o)` 和近失事件可直接由 MuJoCo 的接觸與落盤驗證結果提供。
+演示器的 IK、路徑碰撞預檢與接觸觸發夾持位於 [run_sorting_demo.py](../src/run_sorting_demo.py)。它以固定 seed 驗證中央端的任務序列、共享區保留與輸出托盤路由。工件不使用座標式運動學附著；只有 MuJoCo 接觸成立才會啟用夾持約束，`q_(a,o)`、`eta(a,o)` 和近失事件可直接由接觸與落盤驗證結果提供。
