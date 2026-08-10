@@ -592,7 +592,13 @@ class SortingDemo:
                     return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
         return True, "clear"
 
-    def _preflight_joint_pair(self, first: ArmMission, second: ArmMission, horizon_s: float | None = None) -> tuple[bool, str]:
+    def _preflight_joint_pair(
+        self,
+        first: ArmMission,
+        second: ArmMission,
+        horizon_s: float | None = None,
+        enforce_warning: bool = True,
+    ) -> tuple[bool, str]:
         """Validate predicted trajectories, optionally only the near-term window."""
         trial = mujoco.MjData(self.model)
         start_s = min(first.trajectory[0][0], second.trajectory[0][0])
@@ -610,9 +616,10 @@ class SortingDemo:
             contacts = self._forbidden_contacts(trial)
             if contacts:
                 return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
-            overlaps = self._warning_envelope_overlaps(trial)
-            if overlaps:
-                return False, f"time={at_s:.2f}: safety_envelope {overlaps[0][0]} / {overlaps[0][1]}"
+            if enforce_warning:
+                overlaps = self._warning_envelope_overlaps(trial)
+                if overlaps:
+                    return False, f"time={at_s:.2f}: safety_envelope {overlaps[0][0]} / {overlaps[0][1]}"
         return True, "clear"
 
     def _mission_pose_at(self, mission: ArmMission, at_s: float) -> tuple[np.ndarray, float]:
@@ -1187,7 +1194,7 @@ class SortingDemo:
         # Only the near future is screened here. The standby pose already
         # passed the complete lead-path screen; requiring the whole remaining
         # mission again would incorrectly serialize the two equal peers.
-        safe, _ = self._preflight_joint_pair(lead, probe, horizon_s=1.0)
+        safe, _ = self._preflight_joint_pair(lead, probe, horizon_s=1.0, enforce_warning=False)
         if not safe:
             self._log("handoff_creep_hold", object_id=standby.object_id, arm=standby.arm.value, reason="peer_path_screen")
             return

@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.12.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.12.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 
 本版將 handoff 接近段改為並行短視窗規劃：安全待命位通過完整路徑預檢後，待命手臂依 Bayesian readiness 緩慢朝動態預抓取位姿移動，每次只驗證接下來 1 秒，避免錯誤等待共同走廊完全淨空。
 
