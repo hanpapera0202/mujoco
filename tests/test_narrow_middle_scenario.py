@@ -26,12 +26,19 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
         self.assertEqual(len(self.demo.items), 10)
         self.assertTrue(all(item.object_class is ObjectClass.MIDDLE for item in self.demo.items))
         first, second = self.demo.items[:2]
-        self.assertLess(first.spawn_time_s, second.spawn_time_s)
+        self.assertEqual(first.spawn_time_s, second.spawn_time_s)
         self.assertAlmostEqual(first.spawn_xyz[1], second.spawn_xyz[1])
 
     def test_feed_interval_controls_every_scheduled_release(self):
         release_times = [item.spawn_time_s for item in self.demo.items]
-        np.testing.assert_allclose(np.diff(release_times), self.demo.parameters.feed_interval_s)
+        expected = [0.2 + (index // int(self.demo.parameters.feed_batch_size)) * self.demo.parameters.feed_interval_s for index in range(10)]
+        np.testing.assert_allclose(release_times, expected)
+
+    def test_default_feed_releases_two_items_per_batch(self):
+        release_times = [item.spawn_time_s for item in self.demo.items]
+        self.assertEqual(release_times[0], release_times[1])
+        self.assertEqual(release_times[2], release_times[3])
+        self.assertEqual(int(self.demo.parameters.feed_batch_size), 2)
 
     def test_robot_bases_are_closer_to_narrow_line(self):
         first = self.demo.model.body_pos[self.demo.model.body("robot_A_base").id]

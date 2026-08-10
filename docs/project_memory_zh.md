@@ -23,6 +23,9 @@
 | JOINT-02 | OPEN | 可行聯合方案中兩臂須同時運動；只允許減速，除非所有聯合候選皆不安全才可停止 | 待新增雙臂速度重疊指標 |
 | JOINT-03 | PASS | 聯合路徑先通過三盒碰撞硬限制，再依貝式完工機率、總工期、同動比例與路徑長度計算效用 | `test_bayesian_joint_planner.py`、`test_narrow_middle_scenario.py` |
 | BAYES-01 | PASS | 路徑安全不確定性以 Beta-Bernoulli 信念表示，成功或失敗證據可更新後驗 | `test_bayesian_joint_planner.py` |
+| DYN-02 | PASS | 安全減速後按剩餘閉爪時間更新動態攔截點；A 與 B 均須能對移動 MIDDLE 物件形成雙指接觸 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
+| FEED-02 | PASS | GUI 可設定每批投料物品數，預設同時投放 2 件，投料間隔套用於批次之間 | `test_narrow_middle_scenario.py` |
+| PREP-01 | PASS | 抓取任務先執行提前準備與跟帶靠近，再下降閉爪，不得只在最終位置突然啟動 | `test_dynamic_intercept.py`、任務階段快照 |
 
 ## 新需求加入方式
 

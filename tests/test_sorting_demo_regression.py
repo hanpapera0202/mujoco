@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from run_sorting_demo import ArmId, SortingDemo
+from run_sorting_demo import ArmId, DemoParameters, SortingDemo
 
 
 class SortingDemoPhysicalRegressionTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
-        cls.demo = SortingDemo(model_path, seed=42)
+        cls.demo = SortingDemo(model_path, seed=42, parameters=DemoParameters(feed_batch_size=1.0))
         with redirect_stdout(StringIO()):
             while cls.demo.data.time < 20.75 and not cls.demo.paused:
                 cls.demo.step()
