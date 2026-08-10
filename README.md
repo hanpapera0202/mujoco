@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.3.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.3.2`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例

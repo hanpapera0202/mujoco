@@ -12,4 +12,4 @@
 
 其中 `<scope>` 可為 `sim`、`planner`、`grasp`、`model`、`dashboard`、`docs` 或 `build`。發布版本時必須建立並推送同名 Git tag，例如 `v0.2.0`。
 
-目前版本 `0.3.1` 加入專案需求記憶、固定 seed 物理抓取回歸門檻與 GitHub Actions；`PLACE-01` 的真實動力運送仍列為尚未完成，不納入成功數據。
+目前版本 `0.3.2` 加入專案需求記憶、固定 seed 物理抓取回歸門檻與 GitHub Actions；`PLACE-01` 的真實動力運送仍列為尚未完成，不納入成功數據。
