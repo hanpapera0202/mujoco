@@ -24,7 +24,9 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.11.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.12.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+
+本版將 handoff 接近段改為並行短視窗規劃：安全待命位通過完整路徑預檢後，待命手臂依 Bayesian readiness 緩慢朝動態預抓取位姿移動，每次只驗證接下來 1 秒，避免錯誤等待共同走廊完全淨空。
 
 本版加入效能節流：追蹤 IK 降至 12.5 Hz、使用 12 次 warm-start 迭代，目標位移小於 8 mm 時不重算；預測安全檢查降至 50 Hz，但 MuJoCo 實體接觸仍每個 500 Hz 控制步檢查。viewer 落後時最多補跑 8 步，避免畫面因追趕模擬時間而卡住。
 

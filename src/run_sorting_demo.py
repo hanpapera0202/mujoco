@@ -592,11 +592,13 @@ class SortingDemo:
                     return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
         return True, "clear"
 
-    def _preflight_joint_pair(self, first: ArmMission, second: ArmMission) -> tuple[bool, str]:
-        """Validate both predicted trajectories on one dense simulation clock."""
+    def _preflight_joint_pair(self, first: ArmMission, second: ArmMission, horizon_s: float | None = None) -> tuple[bool, str]:
+        """Validate predicted trajectories, optionally only the near-term window."""
         trial = mujoco.MjData(self.model)
         start_s = min(first.trajectory[0][0], second.trajectory[0][0])
         end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
+        if horizon_s is not None:
+            end_s = min(end_s, self.data.time + max(0.1, horizon_s))
         for at_s in np.arange(start_s, end_s + 0.001, 0.10):
             trial.qpos[:] = self.data.qpos
             for mission in (first, second):
@@ -1155,16 +1157,26 @@ class SortingDemo:
         return True
 
     def _start_handoff_creep(self, standby: ArmMission) -> None:
-        """Try a slow, screened approach while the lead arm performs its pick."""
+        """Begin a short-horizon, probabilistically timed approach in parallel."""
         if standby.handoff_target_qpos is None or standby.arm not in self.missions:
             return
         kin = self.kinematics[standby.arm]
         current = self.data.qpos[kin.qpos_addresses].copy()
         readiness = self.bayesian_game.belief_for("outer", "direct").mean
         duration = 2.0 + 3.0 * (1.0 - readiness)
+        pick_xyz = self._grasp_target(
+            standby.arm,
+            self._predict_part_position(object_id=standby.object_id, horizon_s=duration + TRACKING_LEAD_S),
+        )
+        pick_xyz[2] = PREGRASP_HEIGHT_M
+        creep_qpos = kin.solve_position_ik(
+            pick_xyz,
+            current,
+            max_iterations=TRACKING_IK_MAX_ITERATIONS,
+        )
         probe = copy.deepcopy(standby)
         probe.preparation_complete = False
-        probe.keyframes = [("handoff_creep", duration, standby.handoff_target_qpos.copy(), GRIP_OPEN_M)]
+        probe.keyframes = [("handoff_creep", duration, creep_qpos, GRIP_OPEN_M)]
         probe.keyframe_index = 0
         probe.keyframe_started_s = self.data.time
         probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
@@ -1172,7 +1184,10 @@ class SortingDemo:
         lead = self.missions.get(standby.handoff_lead_assignment.arm) if standby.handoff_lead_assignment is not None else None
         if lead is None:
             return
-        safe, _ = self._preflight_joint_pair(lead, probe)
+        # Only the near future is screened here. The standby pose already
+        # passed the complete lead-path screen; requiring the whole remaining
+        # mission again would incorrectly serialize the two equal peers.
+        safe, _ = self._preflight_joint_pair(lead, probe, horizon_s=1.0)
         if not safe:
             self._log("handoff_creep_hold", object_id=standby.object_id, arm=standby.arm.value, reason="peer_path_screen")
             return
