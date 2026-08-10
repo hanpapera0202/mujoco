@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.3.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.3.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -42,3 +42,15 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
 演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。
+
+## 專案記憶與防退化
+
+新增需求前先在 [專案記憶與驗收契約](docs/project_memory_zh.md) 建立需求 ID，再修改程式並加入可量測的測試。根目錄的 `AGENTS.md` 會提醒後續 Codex 工作先讀取這份台帳，並禁止以放寬判定、啟用 weld 或刪除測試掩蓋退化。
+
+每次修改後執行：
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+固定 seed 測試會實際運行 MuJoCo 至第一對工件完成夾持，檢查雙臂並行、雙指實體接觸、無 equality constraint 與無安全失敗。GitHub Actions 會在每次 push 或 pull request 再執行一次相同門檻。
