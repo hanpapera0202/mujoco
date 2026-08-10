@@ -7,14 +7,18 @@
 | ID | 狀態 | 需求 | 自動驗證 |
 |---|---|---|---|
 | ARCH-01 | PASS | 兩台 Nova5 由同一個集中式 CSPR 協調，沒有主從手臂 | `test_central_coordinator.py` |
-| PAR-01 | PASS | 固定 seed 42 的第一對左右物件由 A、B 同時執行 | `test_sorting_demo_regression.py` |
+| PAR-01 | ARCHIVED v0.4 | 固定 seed 42 的第一對左右物件由 A、B 同時執行 | Git tag `v0.4.0` |
 | GRASP-01 | PASS | 抓取必須同時接觸左右兩個實體指墊 | `test_sorting_demo_regression.py` |
 | GRASP-02 | PASS | 抓取不得啟用 weld/equality constraint，也不得瞬移物件 | `test_sorting_demo_regression.py` |
-| SAFE-01 | PASS | 第一對並行抓取期間不得發生雙臂碰撞或安全停止 | `test_sorting_demo_regression.py` |
+| SAFE-01 | PASS | 固定 seed 物理抓放期間不得發生雙臂碰撞或安全停止 | `test_sorting_demo_regression.py` |
 | LOAD-01 | PASS | 投料間隔及最大線上物件數可設定，避免輸入率超過服務率 | 程式參數與控制台 |
-| PLACE-00 | PASS | 固定 seed 42 的首對物件須維持雙指夾持至釋放，並落入左右正確托盤 | `test_sorting_demo_regression.py` |
+| PLACE-00 | PASS | 固定 seed 42 的首件須維持雙指夾持至釋放，並落入中央分配的正確托盤 | `test_sorting_demo_regression.py` |
 | PLACE-01 | OPEN | 物件須靠真實夾持力運送並落入正確托盤，10 件完成率目標 100% | 尚待低階動力控制完成 |
 | GUI-01 | PASS | 中文控制台可開啟或重新開啟對應的 MuJoCo 視窗；開始動作會同時開啟視窗 | `test_demo_dashboard.py` |
+| LINE-01 | PASS | v0.5 產線有效皮帶寬度為 45 cm，兩台 Nova5 基座位於 x = +/-0.58 m | `test_narrow_middle_scenario.py` |
+| ALLOC-01 | PASS | v0.5 的 10 件皆為 MIDDLE；完全同分首件 A 優先，後續按負載維持平行權限 | `test_central_coordinator.py`、`test_narrow_middle_scenario.py` |
+| SAFE-02 | PASS | 每臂以上臂、前臂、夾爪三個長方體作粗略模型，雙臂活動預警區由盒體各面外擴 10 cm | `test_narrow_middle_scenario.py` |
+| PAR-02 | OPEN | 全 MIDDLE 動態產線提高雙臂同時運動比例；目前 10 cm 領域會讓部分中央預約等待 | 待新增重疊時間指標與協調路徑 |
 
 ## 新需求加入方式
 

@@ -80,10 +80,10 @@ class Decision:
 class CentralCoordinator:
     """Hard-screen candidates then globally choose a parallel-safe assignment.
 
-    LEFT objects are exclusive to A and RIGHT objects are exclusive to B in v1.
     MIDDLE objects are shared: assigning one to A routes it to ``left_bin``;
-    assigning one to B routes it to ``right_bin``.  Reservations are commitments:
-    they are never reassigned by later calls to :meth:`decide`.
+    assigning one to B routes it to ``right_bin``. LEFT/RIGHT remain supported
+    for comparison scenarios, but the v0.5 benchmark intentionally supplies
+    only MIDDLE objects. Reservations remain commitments until completion.
     """
 
     def __init__(
@@ -104,6 +104,7 @@ class CentralCoordinator:
         self.success_weight = success_weight
         self.travel_weight = travel_weight
         self.reservations: list[Reservation] = []
+        self.assignment_counts = {ArmId.A: 0, ArmId.B: 0}
 
     def decide(
         self,
@@ -140,6 +141,8 @@ class CentralCoordinator:
                 rejected.setdefault(obj.object_id, []).append("no_feasible_arm")
 
         assignments = self._choose_global_assignment(candidates)
+        for assignment in assignments:
+            self.assignment_counts[assignment.arm] += 1
         self.reservations.extend(
             Reservation(item.arm, item.object_id, item.workspace_zone, item.interval_s) for item in assignments
         )
@@ -214,19 +217,25 @@ class CentralCoordinator:
                 continue
             feasible_sets.append(pair)
 
-        def objective(items: tuple[Candidate, ...]) -> tuple[float, int, float]:
+        def objective(items: tuple[Candidate, ...]) -> tuple[float, int, int, int, float]:
             # Prefer two useful, simultaneous motions before minor score gains.
             parallel = self.parallel_bonus if len(items) == 2 else 0.0
             score = sum(item.score for item in items) + parallel
+            fairness = -sum(self.assignment_counts[item.arm] for item in items)
+            initial_a_priority = sum(item.arm is ArmId.A for item in items)
             earliest_deadline_proxy = -sum(item.interval_s[1] for item in items)
-            return score, len(items), earliest_deadline_proxy
+            return score, len(items), fairness, initial_a_priority, earliest_deadline_proxy
 
         return list(max(feasible_sets, key=objective))
 
     def _pair_conflicts(self, first: Candidate, second: Candidate) -> bool:
+        if first.workspace_zone == second.workspace_zone == "shared_middle":
+            return False
         return first.workspace_zone == second.workspace_zone and self._intervals_overlap(first.interval_s, second.interval_s)
 
     def _reservation_conflicts(self, candidate: Candidate) -> bool:
+        if candidate.workspace_zone == "shared_middle":
+            return False
         return any(
             existing.zone == candidate.workspace_zone
             and self._intervals_overlap(existing.interval_s, candidate.interval_s)

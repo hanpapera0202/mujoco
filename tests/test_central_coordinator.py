@@ -37,6 +37,23 @@ class CentralCoordinatorTests(unittest.TestCase):
         self.assertEqual(second.assignments, [])
         self.assertEqual(second.rejected["middle"], ["already_committed"])
 
+    def test_two_middle_objects_can_be_allocated_to_equal_peer_arms(self):
+        decision = CentralCoordinator().decide(
+            0.0,
+            (obj("middle_1", ObjectClass.MIDDLE, 0.0), obj("middle_2", ObjectClass.MIDDLE, 0.0)),
+            ARMS,
+        )
+        self.assertEqual(len(decision.assignments), 2)
+        self.assertEqual({item.arm for item in decision.assignments}, {ArmId.A, ArmId.B})
+
+    def test_equal_single_middle_tie_starts_with_a_then_balances_to_b(self):
+        coordinator = CentralCoordinator()
+        first = coordinator.decide(0.0, (obj("first", ObjectClass.MIDDLE, 0.0),), ARMS)
+        self.assertEqual(first.assignments[0].arm, ArmId.A)
+        coordinator.mark_completed("first")
+        second = coordinator.decide(2.0, (obj("second", ObjectClass.MIDDLE, 0.0),), ARMS)
+        self.assertEqual(second.assignments[0].arm, ArmId.B)
+
     def test_cross_zone_assignment_is_rejected(self):
         decision = CentralCoordinator().decide(0.0, (obj("left", ObjectClass.LEFT, -0.5),), (ARMS[1],))
         self.assertEqual(decision.assignments, [])

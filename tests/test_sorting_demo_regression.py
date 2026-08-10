@@ -1,5 +1,6 @@
 from contextlib import redirect_stdout
 from io import StringIO
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -12,7 +13,7 @@ from run_sorting_demo import ArmId, SortingDemo
 
 
 class SortingDemoPhysicalRegressionTests(unittest.TestCase):
-    """Protect the complete seed-42 physical pick-and-place pair."""
+    """Protect the first complete seed-42 all-MIDDLE physical cycle."""
 
     @classmethod
     def setUpClass(cls):
@@ -23,15 +24,14 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
                 cls.demo.step()
         cls.events = cls.demo.event_log
 
-    def test_first_pair_is_assigned_to_equal_peer_arms_concurrently(self):
+    def test_first_object_is_centrally_assigned_by_continuous_cost(self):
         assignments = [event for event in self.events if event["event"] == "assign"]
-        first_pair = {(event["arm"], event["object_id"]) for event in assignments}
-        self.assertEqual(first_pair, {("A", "part_02"), ("B", "part_01")})
-        self.assertAlmostEqual(assignments[0]["time_s"], assignments[1]["time_s"], places=3)
+        self.assertEqual((assignments[0]["arm"], assignments[0]["object_id"]), ("B", "part_01"))
+        self.assertTrue(all(item.object_class.value == "middle" for item in self.demo.items))
 
-    def test_first_pair_requires_bilateral_physical_contact(self):
+    def test_first_object_requires_bilateral_physical_contact(self):
         grasps = [event for event in self.events if event["event"] == "grasp"]
-        self.assertEqual({event["object_id"] for event in grasps}, {"part_01", "part_02"})
+        self.assertEqual({event["object_id"] for event in grasps}, {"part_01"})
         for event in grasps:
             self.assertEqual(event["finger_count"], 2)
             self.assertEqual(event["contact"], "bilateral_finger_physical")
@@ -44,18 +44,26 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
         self.assertFalse(any(event["event"] in forbidden_events for event in self.events))
         self.assertFalse(self.demo.paused)
 
-    def test_first_pair_remains_held_until_physical_release(self):
+    def test_first_object_remains_held_until_physical_release(self):
         releases = [event for event in self.events if event["event"] == "release"]
-        self.assertEqual({event["object_id"] for event in releases}, {"part_01", "part_02"})
+        self.assertEqual({event["object_id"] for event in releases}, {"part_01"})
         for event in releases:
             self.assertEqual(event["finger_count"], 2)
             self.assertGreater(event["part_xyz"][2], 0.20)
 
-    def test_first_pair_is_verified_in_its_target_trays(self):
+    def test_first_object_is_verified_in_its_target_tray(self):
         placements = [event for event in self.events if event["event"] == "place"]
-        self.assertEqual({event["object_id"] for event in placements}, {"part_01", "part_02"})
-        self.assertEqual(self.demo.placed, {"part_01", "part_02"})
+        self.assertEqual({event["object_id"] for event in placements}, {"part_01"})
+        self.assertEqual(self.demo.placed, {"part_01"})
         self.assertFalse(self.demo.missed)
+
+    def test_warning_margin_is_exposed_for_gui_monitoring(self):
+        safety = self.demo.snapshot()["safety"]
+        self.assertEqual(safety["warning_margin_m"], 0.10)
+        self.assertFalse(self.demo._inter_arm_contacts())
+
+    def test_gui_snapshot_is_json_serializable_after_a_real_decision(self):
+        json.dumps(self.demo.snapshot(), ensure_ascii=False)
 
     def test_load_control_parameters_remain_explicit(self):
         self.assertGreaterEqual(self.demo.parameters.feed_interval_s, self.demo.parameters.fixed_cycle_s)

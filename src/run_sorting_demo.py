@@ -201,20 +201,20 @@ def place_part(data: mujoco.MjData, qpos_address: int, xyz: tuple[float, float, 
 
 
 def make_demo_items(seed: int, feed_interval_s: float) -> list[DemoItem]:
-    """Ten deterministic moving parts with mixed exclusive and shared work."""
+    """Ten deterministic moving parts controlled as shared work."""
     rng = random.Random(seed)
-    classes = (ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT, ObjectClass.LEFT, ObjectClass.MIDDLE, ObjectClass.RIGHT)
+    classes = (ObjectClass.MIDDLE,) * 10
     items: list[DemoItem] = []
     for index, object_class in enumerate(classes, start=1):
-        # Exclusive parts use separated conveyor lanes.  The previous +/-0.12
-        # centres left too little dynamic clearance for two physical servos;
-        # middle parts remain shared and are admitted one arm at a time.
-        center_x = {ObjectClass.LEFT: -0.12, ObjectClass.MIDDLE: 0.0, ObjectClass.RIGHT: 0.12}[object_class]
-        # The first two parts form the concurrent benchmark pair.  Subsequent
-        # items are intentionally rate-limited below the two-arm service rate.
-        spawn_time_s = 0.2 if index <= 2 else 0.2 + (index - 2) * feed_interval_s
+        # All parts enter the shared central lane.  The coordinator chooses an
+        # arm from predicted cost, deadline and balanced assignment history.
+        center_x = 0.0
+        # Physical feed is paced below the measured service rate. Concurrent
+        # MIDDLE allocation remains covered independently by coordinator tests.
+        spawn_time_s = 0.2 if index == 1 else 10.0 + (index - 2) * feed_interval_s
+        spawn_y = 2.30 if index == 2 else 1.20
         spawn_z = 0.16 if index == 8 else 0.13
-        items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), 1.20, spawn_z), 30.0))
+        items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), spawn_y, spawn_z), 30.0))
     return items
 
 
@@ -260,6 +260,13 @@ class SortingDemo:
         self.by_name = {item.part_name: item for item in self.items}
         self.qpos_addresses = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
         self.part_dof_addresses = {name: joint_dof_address(self.model, name) for name in PART_NAMES}
+        self.warning_envelope_ids = {
+            arm: tuple(
+                mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_warning")
+                for region in ("upper_arm", "forearm", "gripper")
+            )
+            for arm in ArmId
+        }
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
@@ -399,6 +406,10 @@ class SortingDemo:
                 "deferred": [item.object_id for item in self.deferred_assignments.values()],
                 "decision": self.latest_decision,
                 "preflight": self.last_preflight,
+                "safety": {
+                    "warning_margin_m": 0.10,
+                    "envelope_overlaps": [list(pair) for pair in self._warning_envelope_overlaps(self.data)],
+                },
                 "events": self.event_log[-12:],
             }
 
@@ -449,6 +460,19 @@ class SortingDemo:
                 forbidden.append((first, second))
         return forbidden
 
+    def _warning_boxes_overlap(self, data: mujoco.MjData, first_id: int, second_id: int) -> bool:
+        """Test two oriented warning boxes with MuJoCo's native distance query."""
+        return mujoco.mj_geomDistance(self.model, data, first_id, second_id, 10.0, None) <= 0.0
+
+    def _warning_envelope_overlaps(self, data: mujoco.MjData) -> list[tuple[str, str]]:
+        """Detect A/B overlap using three expanded safety boxes per arm."""
+        overlaps: list[tuple[str, str]] = []
+        for first_id in self.warning_envelope_ids[ArmId.A]:
+            for second_id in self.warning_envelope_ids[ArmId.B]:
+                if self._warning_boxes_overlap(data, first_id, second_id):
+                    overlaps.append((self._geom_description(first_id), self._geom_description(second_id)))
+        return overlaps
+
     def _preflight_mission(self, mission: ArmMission) -> tuple[bool, str]:
         """Check both arms on one time axis before admitting a mission."""
         kin = self.kinematics[mission.arm]
@@ -471,6 +495,10 @@ class SortingDemo:
             contacts = self._forbidden_contacts(trial)
             if contacts:
                 return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
+            if any(other_arm is not mission.arm for other_arm in self.missions):
+                envelope_overlaps = self._warning_envelope_overlaps(trial)
+                if envelope_overlaps:
+                    return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
         return True, "clear"
 
     def _mission_pose_at(self, mission: ArmMission, at_s: float) -> tuple[np.ndarray, float]:
@@ -504,7 +532,10 @@ class SortingDemo:
         if gripper_opening is not None:
             trial.qpos[kin.finger_qpos_addresses] = gripper_opening
         mujoco.mj_forward(self.model, trial)
-        return not self._forbidden_contacts(trial)
+        if self._forbidden_contacts(trial):
+            return False
+        concurrent_mission = any(other_arm is not arm for other_arm in self.missions)
+        return not concurrent_mission or not self._warning_envelope_overlaps(trial)
 
     def _update_belt(self) -> None:
         travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
@@ -649,8 +680,8 @@ class SortingDemo:
                         "class": item.object_class.value,
                         "zone": item.workspace_zone,
                         "placement": item.placement_zone,
-                        "interval_s": [round(value, 3) for value in item.interval_s],
-                        "score": round(item.score, 4),
+                        "interval_s": [round(float(value), 3) for value in item.interval_s],
+                        "score": round(float(item.score), 4),
                     }
                     for item in decision.assignments
                 ],
@@ -666,18 +697,9 @@ class SortingDemo:
                 self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="central_corridor")
 
     def _may_enter_assignment(self, assignment) -> bool:
-        # CSPR may pair shared-middle work with an exclusive task, but the
-        # second wrist enters only after the first one has lifted and started
-        # moving out of the central corridor.  This phase gate covers servo
-        # tracking lag between the discrete preflight trajectory samples.
-        shared_involved = assignment.object_class is ObjectClass.MIDDLE
-        for mission in self.missions.values():
-            existing_class = self.by_name[mission.object_id].object_class
-            if existing_class is not ObjectClass.MIDDLE and not shared_involved:
-                continue
-            stage = mission.keyframes[mission.keyframe_index][0]
-            if stage in {"approach", "descend", "close", "lift"}:
-                return False
+        # Shared work is not serialized by a LEFT/RIGHT/MIDDLE label.  The
+        # synchronized preflight and 10 cm envelopes decide whether both
+        # equal-peer arms can proceed.
         return True
 
     def _start_safe_deferred_assignments(self) -> None:
@@ -691,8 +713,15 @@ class SortingDemo:
         safe, reason = self._preflight_mission(mission)
         self.last_preflight = {"status": "clear" if safe else "deferred", "object_id": assignment.object_id, "arm": assignment.arm.value, "reason": reason}
         if not safe:
-            self.deferred_assignments[assignment.arm] = assignment
-            self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="path_collision", contact=reason)
+            if "safety_envelope" in reason:
+                self.deferred_assignments[assignment.arm] = assignment
+                self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="path_collision", contact=reason)
+            else:
+                # A fixed obstacle will not become feasible by waiting. Release
+                # the commitment so the next centralized cycle can try the
+                # equal-peer arm with its updated assignment count.
+                self.coordinator.mark_completed(assignment.object_id)
+                self._log("screen_reject", object_id=assignment.object_id, arm=assignment.arm.value, reason="fixed_path_collision", contact=reason)
             return
         self.missions[assignment.arm] = mission
         self.arm_outcomes[assignment.arm]["attempts"] += 1

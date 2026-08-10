@@ -2,15 +2,15 @@
 
 Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版。
 
-第一版的目的不是直接控制關節，而是在相同的 MuJoCo / IK 執行器前提下，比較不同高階任務分派方法。中央協調器會快速排除不可行候選，再以全域方式指派兩台平等的手臂，並用「工作區 + 時間區間」建立不可撤銷的預約。
+目前版本的目的，是在相同的 MuJoCo / IK 執行器前提下比較高階任務分派方法。中央協調器會快速排除不可行候選，再以全域方式指派兩台平等的手臂，並以同步軌跡與碰撞領域檢查任務。
 
 ## 目前規則
 
-- 5 秒滾動規劃視窗，兩台手臂每次最多各有一個未完成預約。
-- `LEFT` 只交給 Robot A，放入左側區域；`RIGHT` 只交給 Robot B，放入右側區域。
-- `MIDDLE` 位於共享工作區，中央端同時選擇取件手臂與左/右放置區。
-- 同一共享區時段只能有一台手臂進入；未獲得中間件的手臂會優先處理自己的專屬區任務。
-- 預約一旦建立不重新指派；物件超過尾端而未取件即為 `MISSED`。
+- 30 秒滾動規劃視窗，兩台平權手臂每次最多各有一個未完成預約。
+- 固定 seed 的 10 件物體全部是 `MIDDLE`，不再先貼 LEFT / RIGHT 標籤。
+- 中央端以可達性、期限、成功率、路徑成本與歷史負載選擇 A 或 B；真正完全同分時首輪 A 優先。
+- 每臂以上臂、前臂、夾爪三個長方體建模；雙臂同時活動時，以盒體各面外擴 10 cm 的領域預警。
+- 固定環境碰撞會立即撤銷候選並重新匹配；雙臂領域衝突則保留預約等待安全窗口。
 
 ## 執行
 
@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.4.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.5.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -35,7 +35,7 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 
 ## MuJoCo 抓取演示
 
-`src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。固定 seed 先產生 `LEFT` 與 `RIGHT` 工件以供雙臂並行，再交錯產生共享區 `MIDDLE` 工件；皮帶速度為 `0.24 m/s`。中央協調器安排共享區與專屬區任務，再讓兩台 Nova5 以 6D 姿態 IK 維持水平雙指、垂直指面的抓取姿態，依序執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。只有 MuJoCo 回報指墊與工件的實體接觸才會啟用夾持約束；接觸前工件完全由輸送帶物理運動，放開時立即解除約束，且放置必須由工件最後落入目標托盤的範圍驗證。
+`src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。皮帶有效寬度為 45 cm，固定 seed 的全部工件都從中央共享帶進入，皮帶速度為 `0.12 m/s`。兩台 Nova5 基座位於 x = +/-0.58 m。中央協調器安排任務後，手臂以 6D 姿態 IK 依序執行接近、下降、閉合、抬升、移至托盤、放開與回原位。只有 MuJoCo 回報雙側指墊實體接觸才算抓取成功，不使用 weld/equality constraint，且放置必須由工件最後落入目標托盤驗證。
 
 目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。執行器會以實測週期回授更新派工估計、限制投料負載，並在相同時間軸上預檢候選與既有手臂的關節路徑。抓取需雙側指墊同時接觸，且不使用 weld；最後仍須通過托盤位置驗證才列為成功。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
 
@@ -53,4 +53,4 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 python -m unittest discover -s tests -v
 ```
 
-固定 seed 測試會實際運行 MuJoCo 至第一對工件完成夾持，檢查雙臂並行、雙指實體接觸、無 equality constraint 與無安全失敗。GitHub Actions 會在每次 push 或 pull request 再執行一次相同門檻。
+固定 seed 測試會實際運行 MuJoCo 至第一件工件完成放置，檢查中央派工、雙指實體接觸、無 equality constraint、10 cm 警戒模型與無安全失敗。另有單元測試驗證兩件 MIDDLE 可同時分配給平權雙臂。GitHub Actions 會在每次 push 或 pull request 再執行一次相同門檻。
