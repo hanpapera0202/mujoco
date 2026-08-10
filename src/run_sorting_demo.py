@@ -47,10 +47,12 @@ CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
 TRACKING_IK_PERIOD_S = 0.08
 TRACKING_LEAD_S = 0.10
-TRACKING_IK_MAX_ITERATIONS = 12
+TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
 SAFETY_CHECK_PERIOD_S = 0.02
 MAX_VIEWER_SUBSTEPS = 8
+IK_SOLVER_ID = "cr_rrik"
+IK_SOLVER_NAME = "Continuity-Regularized Resolved-Rate IK"
 MIN_PICK_HEIGHT_M = 0.135
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
@@ -177,7 +179,17 @@ class ArmKinematics:
         return self.data.site_xpos[self.grasp_site_id].copy()
 
     def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
-        """Damped 6D IK with a fixed, conveyor-facing parallel-gripper pose."""
+        """Compatibility entry point for the continuity-regularized velocity IK."""
+        return self.solve_resolved_rate_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+
+    def solve_resolved_rate_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
+        """Resolved-rate IK with posture continuity and joint-limit avoidance.
+
+        The damped Jacobian solves the Cartesian velocity, while the null-space
+        term keeps the solution near the incoming posture and the arm home pose.
+        This prevents equivalent elbow/wrist branches from flipping between
+        dense conveyor updates.
+        """
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
         for _ in range(max_iterations):
@@ -192,12 +204,18 @@ class ArmKinematics:
             rotation_jacobian = np.zeros((3, self.model.nv))
             mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
             selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
-            step = selected.T @ np.linalg.solve(selected @ selected.T + 0.045 * np.eye(6), error)
+            damping = 0.035 + 0.02 * min(1.0, np.linalg.norm(error))
+            inverse = selected.T @ np.linalg.solve(selected @ selected.T + damping * np.eye(6), np.eye(6))
+            resolved_rate = inverse @ error
+            posture_error = 0.18 * (self.home_qpos - self.data.qpos[self.qpos_addresses])
+            nullspace = np.eye(6) - inverse @ selected
+            step = resolved_rate + nullspace @ posture_error
             step *= min(1.0, 0.11 / max(np.linalg.norm(step), 1e-9))
             updated = self.data.qpos[self.qpos_addresses] + step
             for index, joint_id in enumerate(self.joint_ids):
                 low, high = self.model.jnt_range[joint_id]
-                updated[index] = np.clip(updated[index], low + 0.02, high - 0.02)
+                margin = 0.02 + 0.02 * min(1.0, abs(updated[index] - self.home_qpos[index]))
+                updated[index] = np.clip(updated[index], low + margin, high - margin)
             self.data.qpos[self.qpos_addresses] = updated
         solution = self.data.qpos[self.qpos_addresses].copy()
         self.data.qpos[:] = saved_qpos
@@ -463,6 +481,7 @@ class SortingDemo:
             return {
                 "seed": self.seed,
                 "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
+                "ik_solver": {"id": IK_SOLVER_ID, "name": IK_SOLVER_NAME},
                 "time_s": round(float(self.data.time), 3),
                 "paused": self.paused,
                 "viewer": {
