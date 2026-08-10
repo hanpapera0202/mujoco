@@ -74,6 +74,7 @@ class DashboardViewerControlTests(unittest.TestCase):
     def test_visible_demo_settings_action_reaches_the_simulator(self):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="apply-demo-settings"', html)
+        self.assertLess(html.index('id="apply-demo-settings"'), html.index('<form id="settings">'))
         demo = FakeDemo()
         dashboard = start_dashboard(demo, port=0)
         try:

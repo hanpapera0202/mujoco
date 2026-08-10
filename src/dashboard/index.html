@@ -18,7 +18,9 @@
         <button id="pause" type="button">暫停</button>
         <button id="restart" type="button">重新播放</button>
         <button id="open-mujoco" type="button">開啟 / 顯示 MuJoCo</button>
+        <button id="apply-demo-settings" class="primary apply-settings" type="submit" form="settings">套用設定並重播</button>
       </div>
+      <output id="settings-status" class="settings-status" aria-live="polite"></output>
       <p id="viewer-status" class="viewer-status">正在確認 MuJoCo 視窗</p>
       <form id="settings">
         <h1>演示設定</h1>
@@ -27,10 +29,6 @@
         <label>皮帶速度 (m/s)<input name="belt_speed_mps" type="number" min="0.02" max="0.5" step="0.01" required></label>
         <label>投料間隔 (s)<input name="feed_interval_s" type="number" min="1" max="30" step="0.1" required></label>
         <label>最大線上物件數<input name="max_active_parts" type="number" min="1" max="10" step="1" required></label>
-        <div class="settings-action">
-          <button id="apply-demo-settings" class="primary" type="submit">套用演示設定並重播</button>
-          <output id="settings-status" aria-live="polite"></output>
-        </div>
         <h1>演算法</h1>
         <label>協調方法
           <select name="algorithm" id="algorithm">
