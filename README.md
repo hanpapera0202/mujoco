@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.13.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.13.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 
 本版 IK 改用 `CR-RRIK`（Continuity-Regularized Resolved-Rate IK）：以阻尼 Jacobian 求解末端速度，加入零空間姿勢連續項與關節限位邊界，降低手肘翻轉及腕部突然繞轉。
 

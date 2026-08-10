@@ -179,8 +179,32 @@ class ArmKinematics:
         return self.data.site_xpos[self.grasp_site_id].copy()
 
     def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
-        """Compatibility entry point for the continuity-regularized velocity IK."""
-        return self.solve_resolved_rate_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+        """Stable batch IK used for initial collision-screened trajectories."""
+        saved_qpos = self.data.qpos.copy()
+        self.data.qpos[self.qpos_addresses] = start_qpos
+        for _ in range(max_iterations):
+            mujoco.mj_forward(self.model, self.data)
+            current_xmat = self.data.site_xmat[self.grasp_site_id].reshape(3, 3)
+            position_error = target_xyz - self.grasp_position()
+            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], GRASP_XMAT[:, index]) for index in range(3))
+            error = np.concatenate((position_error, 0.28 * rotation_error))
+            if np.linalg.norm(position_error) < 0.012 and np.linalg.norm(rotation_error) < 0.05:
+                break
+            position_jacobian = np.zeros((3, self.model.nv))
+            rotation_jacobian = np.zeros((3, self.model.nv))
+            mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
+            selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
+            step = selected.T @ np.linalg.solve(selected @ selected.T + 0.045 * np.eye(6), error)
+            step *= min(1.0, 0.11 / max(np.linalg.norm(step), 1e-9))
+            updated = self.data.qpos[self.qpos_addresses] + step
+            for index, joint_id in enumerate(self.joint_ids):
+                low, high = self.model.jnt_range[joint_id]
+                updated[index] = np.clip(updated[index], low + 0.02, high - 0.02)
+            self.data.qpos[self.qpos_addresses] = updated
+        solution = self.data.qpos[self.qpos_addresses].copy()
+        self.data.qpos[:] = saved_qpos
+        mujoco.mj_forward(self.model, self.data)
+        return solution
 
     def solve_resolved_rate_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
         """Resolved-rate IK with posture continuity and joint-limit avoidance.
@@ -729,7 +753,13 @@ class SortingDemo:
             rejection_reason="" if safe else reason,
         )
 
-    def _pose_is_safe(self, arm: ArmId, qpos: np.ndarray, gripper_opening: float | None = None) -> bool:
+    def _pose_is_safe(
+        self,
+        arm: ArmId,
+        qpos: np.ndarray,
+        gripper_opening: float | None = None,
+        enforce_warning: bool = False,
+    ) -> bool:
         """Check immediate physical safety; warning envelopes are admission constraints.
 
         Reapplying the 10 cm planning envelope independently to each servo step
@@ -745,6 +775,8 @@ class SortingDemo:
             trial.qpos[kin.finger_qpos_addresses] = gripper_opening
         mujoco.mj_forward(self.model, trial)
         if self._forbidden_contacts(trial):
+            return False
+        if enforce_warning and self._warning_envelope_overlaps(trial):
             return False
         return True
 
@@ -885,8 +917,8 @@ class SortingDemo:
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
         start = self.data.qpos[kin.qpos_addresses].copy()
-        q_pregrasp = kin.solve_position_ik(pregrasp, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
-        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
+        q_pregrasp = kin.solve_resolved_rate_ik(pregrasp, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
+        q_pick = kin.solve_resolved_rate_ik(pick_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
         if not self._pose_is_safe(mission.arm, q_pregrasp) or not self._pose_is_safe(mission.arm, q_pick):
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             return
@@ -894,7 +926,7 @@ class SortingDemo:
             if stage == "prepare" and index == mission.keyframe_index:
                 prepare_xyz = pick_xyz.copy()
                 prepare_xyz[2] = 0.56
-                q_prepare = kin.solve_position_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
+                q_prepare = kin.solve_resolved_rate_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
                 mission.keyframes[index] = (stage, duration, q_prepare, opening)
             elif stage == "track":
                 mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
@@ -1200,27 +1232,34 @@ class SortingDemo:
             current,
             max_iterations=TRACKING_IK_MAX_ITERATIONS,
         )
-        probe = copy.deepcopy(standby)
-        probe.preparation_complete = False
-        probe.keyframes = [("handoff_creep", duration, creep_qpos, GRIP_OPEN_M)]
-        probe.keyframe_index = 0
-        probe.keyframe_started_s = self.data.time
-        probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
-        probe.stage_start_qpos = current.copy()
         lead = self.missions.get(standby.handoff_lead_assignment.arm) if standby.handoff_lead_assignment is not None else None
         if lead is None:
             return
-        # Only the near future is screened here. The standby pose already
-        # passed the complete lead-path screen; requiring the whole remaining
-        # mission again would incorrectly serialize the two equal peers.
-        safe, _ = self._preflight_joint_pair(lead, probe, horizon_s=1.0, enforce_warning=False)
-        if not safe:
+        selected_probe = None
+        # Preserve parallel motion while selecting the furthest physically
+        # safe point on the approach path. Warning-box overlap is advisory in
+        # this phase; actual MuJoCo geometry contact remains hard forbidden.
+        for alpha in np.linspace(0.2, 1.0, 5):
+            probe = copy.deepcopy(standby)
+            probe.preparation_complete = False
+            target = interpolate(current, creep_qpos, float(alpha))
+            probe.keyframes = [("handoff_creep", duration, target, GRIP_OPEN_M)]
+            probe.keyframe_index = 0
+            probe.keyframe_started_s = self.data.time
+            probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
+            probe.stage_start_qpos = current.copy()
+            safe, _ = self._preflight_joint_pair(lead, probe, horizon_s=duration, enforce_warning=False)
+            if safe:
+                selected_probe = probe
+            else:
+                break
+        if selected_probe is None:
             self._log("handoff_creep_hold", object_id=standby.object_id, arm=standby.arm.value, reason="peer_path_screen")
             return
-        standby.keyframes = probe.keyframes
+        standby.keyframes = selected_probe.keyframes
         standby.keyframe_index = 0
         standby.keyframe_started_s = self.data.time
-        standby.trajectory = probe.trajectory
+        standby.trajectory = selected_probe.trajectory
         standby.stage_start_qpos = current.copy()
         standby.preparation_complete = False
         self._log("handoff_creep", object_id=standby.object_id, arm=standby.arm.value, duration=round(duration, 2))
@@ -1308,10 +1347,11 @@ class SortingDemo:
             if stage == "open":
                 kin.set_pad_adhesion(0.0)
             require_clearance = stage != "close"
+            handoff_warning_guard = mission.preparation_only and stage == "handoff_creep"
             safety_check_due = self.data.time >= mission.next_safety_check_s
             if safety_check_due:
                 mission.next_safety_check_s = self.data.time + SAFETY_CHECK_PERIOD_S
-            if require_clearance and safety_check_due and not self._pose_is_safe(arm, current, commanded_opening):
+            if require_clearance and safety_check_due and not self._pose_is_safe(arm, current, commanded_opening, handoff_warning_guard):
                 if mission.last_safe_qpos is not None:
                     kin.command_joint_pose(mission.last_safe_qpos, commanded_opening)
                 mission.keyframe_started_s += CONTROL_STEP_S
@@ -1319,7 +1359,7 @@ class SortingDemo:
                 continue
             stage_start = mission.stage_start_qpos if mission.stage_start_qpos is not None else current
             commanded_qpos = interpolate(stage_start, target, smoothstep(elapsed / max(duration, CONTROL_STEP_S)))
-            if require_clearance and safety_check_due and not self._pose_is_safe(arm, commanded_qpos, commanded_opening):
+            if require_clearance and safety_check_due and not self._pose_is_safe(arm, commanded_qpos, commanded_opening, handoff_warning_guard):
                 mission.keyframe_started_s += CONTROL_STEP_S
                 mission.next_safety_check_s = self.data.time + CONTROL_STEP_S
                 if self.data.time - mission.last_safety_hold_s >= 0.5:
