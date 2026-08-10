@@ -12,4 +12,4 @@
 
 其中 `<scope>` 可為 `sim`、`planner`、`grasp`、`model`、`dashboard`、`docs` 或 `build`。發布版本時必須建立並推送同名 Git tag，例如 `v0.2.0`。
 
-目前版本 `0.10.0` 延續 BC-JSP 與雙速率閉迴路 IK，新增 GUI 投料矩形範圍，以及中央交接預備狀態。當雙臂聯合路徑全部被 10 cm 警戒盒否決時，系統先將待命手臂送往 `handoff_escape`，再以 Bayesian readiness 控制接近 `handoff_ready` 的速度；領先手臂會在待命安全後啟動，完成後待命手臂立即接續抓取。預備狀態不會結算物件，也不會把物件誤記為 missed。
+目前版本 `0.11.0` 延續 BC-JSP、中央交接預備與雙速率閉迴路 IK，並加入執行器效能節流。追蹤 IK 採 12.5 Hz、12 次 warm-start 迭代與 8 mm 位移門檻；安全預測採 50 Hz，實體 MuJoCo 接觸仍維持每個控制步檢查。viewer 補步上限為 8，避免模擬落後時拖垮畫面刷新。`snapshot()` 也公開控制頻率、IK 頻率與安全預測頻率，方便 GUI 觀察。

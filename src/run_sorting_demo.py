@@ -45,8 +45,12 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
-TRACKING_IK_PERIOD_S = 0.04
+TRACKING_IK_PERIOD_S = 0.08
 TRACKING_LEAD_S = 0.10
+TRACKING_IK_MAX_ITERATIONS = 12
+TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
+SAFETY_CHECK_PERIOD_S = 0.02
+MAX_VIEWER_SUBSTEPS = 8
 MIN_PICK_HEIGHT_M = 0.135
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
@@ -122,6 +126,7 @@ class ArmMission:
     joint_strategy: tuple[str, str] | None = None
     last_pick_xyz: np.ndarray | None = None
     tracking_updates: int = 0
+    next_safety_check_s: float = 0.0
     preparation_only: bool = False
     handoff_assignment: object | None = None
     handoff_lead_assignment: object | None = None
@@ -466,6 +471,12 @@ class SortingDemo:
                     "requested": self.viewer_open_requested.is_set(),
                 },
                 "parameters": asdict(self.parameters),
+                "performance": {
+                    "control_hz": round(1.0 / CONTROL_STEP_S, 1),
+                    "tracking_ik_hz": round(1.0 / TRACKING_IK_PERIOD_S, 1),
+                    "safety_prediction_hz": round(1.0 / SAFETY_CHECK_PERIOD_S, 1),
+                    "max_viewer_substeps": MAX_VIEWER_SUBSTEPS,
+                },
                 "counts": {"spawned": len(self.spawned), "placed": len(self.placed), "missed": len(self.missed)},
                 "feedback": {
                     "active_parts": len(self.spawned - self.placed - self.missed),
@@ -840,14 +851,14 @@ class SortingDemo:
             self._predict_part_position(mission.object_id, TRACKING_LEAD_S),
         )
         pick_xyz[2] = max(MIN_PICK_HEIGHT_M, pick_xyz[2])
-        if mission.last_pick_xyz is not None and np.linalg.norm(pick_xyz - mission.last_pick_xyz) < 0.003:
+        if mission.last_pick_xyz is not None and np.linalg.norm(pick_xyz - mission.last_pick_xyz) < TRACKING_IK_MIN_TARGET_DELTA_M:
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             return
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
         start = self.data.qpos[kin.qpos_addresses].copy()
-        q_pregrasp = kin.solve_position_ik(pregrasp, start, max_iterations=24)
-        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp, max_iterations=24)
+        q_pregrasp = kin.solve_position_ik(pregrasp, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
+        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
         if not self._pose_is_safe(mission.arm, q_pregrasp) or not self._pose_is_safe(mission.arm, q_pick):
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             return
@@ -855,7 +866,7 @@ class SortingDemo:
             if stage == "prepare" and index == mission.keyframe_index:
                 prepare_xyz = pick_xyz.copy()
                 prepare_xyz[2] = 0.56
-                q_prepare = kin.solve_position_ik(prepare_xyz, start, max_iterations=24)
+                q_prepare = kin.solve_position_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
                 mission.keyframes[index] = (stage, duration, q_prepare, opening)
             elif stage == "track":
                 mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
@@ -1256,15 +1267,20 @@ class SortingDemo:
             if stage == "open":
                 kin.set_pad_adhesion(0.0)
             require_clearance = stage != "close"
-            if require_clearance and not self._pose_is_safe(arm, current, commanded_opening):
+            safety_check_due = self.data.time >= mission.next_safety_check_s
+            if safety_check_due:
+                mission.next_safety_check_s = self.data.time + SAFETY_CHECK_PERIOD_S
+            if require_clearance and safety_check_due and not self._pose_is_safe(arm, current, commanded_opening):
                 if mission.last_safe_qpos is not None:
                     kin.command_joint_pose(mission.last_safe_qpos, commanded_opening)
                 mission.keyframe_started_s += CONTROL_STEP_S
+                mission.next_safety_check_s = self.data.time + CONTROL_STEP_S
                 continue
             stage_start = mission.stage_start_qpos if mission.stage_start_qpos is not None else current
             commanded_qpos = interpolate(stage_start, target, smoothstep(elapsed / max(duration, CONTROL_STEP_S)))
-            if require_clearance and not self._pose_is_safe(arm, commanded_qpos, commanded_opening):
+            if require_clearance and safety_check_due and not self._pose_is_safe(arm, commanded_qpos, commanded_opening):
                 mission.keyframe_started_s += CONTROL_STEP_S
+                mission.next_safety_check_s = self.data.time + CONTROL_STEP_S
                 if self.data.time - mission.last_safety_hold_s >= 0.5:
                     mission.last_safety_hold_s = self.data.time
                     self._log("reserve_wait", object_id=mission.object_id, arm=arm.value, reason="step_collision_guard")
@@ -1405,7 +1421,6 @@ class SortingDemo:
                     self._log("infeed", object_id=item.part_name, object_class=item.object_class.value)
             self._schedule()
             self._update_missions()
-            mujoco.mj_forward(self.model, self.data)
             mujoco.mj_step(self.model, self.data)
             contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
@@ -1482,9 +1497,13 @@ class SortingDemo:
                         now = time.perf_counter()
                         accumulated_s += min(now - last_wall_time, 0.05) * self.parameters.simulation_speed
                         last_wall_time = now
-                        while not self.paused and accumulated_s >= CONTROL_STEP_S and self.data.time < duration_s:
+                        substeps = 0
+                        while not self.paused and accumulated_s >= CONTROL_STEP_S and self.data.time < duration_s and substeps < MAX_VIEWER_SUBSTEPS:
                             self.step()
                             accumulated_s -= CONTROL_STEP_S
+                            substeps += 1
+                        if substeps == MAX_VIEWER_SUBSTEPS:
+                            accumulated_s = min(accumulated_s, CONTROL_STEP_S * MAX_VIEWER_SUBSTEPS)
                         viewer.sync()
                         time.sleep(0.001)
             finally:
