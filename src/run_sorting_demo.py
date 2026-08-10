@@ -408,7 +408,7 @@ class SortingDemo:
                 "preflight": self.last_preflight,
                 "safety": {
                     "warning_margin_m": 0.10,
-                    "envelope_overlaps": [list(pair) for pair in self._warning_envelope_overlaps(self.data)],
+                    "mode": "concurrent_mission_preflight",
                 },
                 "events": self.event_log[-12:],
             }
