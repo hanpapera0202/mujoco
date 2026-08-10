@@ -27,7 +27,7 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
         self.assertTrue(all(item.object_class is ObjectClass.MIDDLE for item in self.demo.items))
         first, second = self.demo.items[:2]
         self.assertLess(first.spawn_time_s, second.spawn_time_s)
-        self.assertGreater(abs(first.spawn_xyz[1] - second.spawn_xyz[1]), 1.00)
+        self.assertAlmostEqual(first.spawn_xyz[1], second.spawn_xyz[1])
 
     def test_feed_interval_controls_every_scheduled_release(self):
         release_times = [item.spawn_time_s for item in self.demo.items]
@@ -44,7 +44,19 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
             for region in ("upper_arm", "forearm", "gripper"):
                 collision = self.demo.model.geom(f"{arm.value}_{region}_collision").size
                 warning = self.demo.model.geom(f"{arm.value}_{region}_warning").size
-                np.testing.assert_allclose(warning - collision, (0.10, 0.10, 0.10))
+                np.testing.assert_allclose(warning - collision, (self.demo.parameters.warning_margin_m,) * 3)
+
+    def test_warning_margin_can_be_changed_without_resizing_physical_boxes(self):
+        model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
+        demo = SortingDemo(model_path, seed=42)
+        collision_before = demo.model.geom("A_forearm_collision").size.copy()
+        demo.update_settings({"warning_margin_m": 0.05})
+        self.assertTrue(demo.reset_if_requested())
+        np.testing.assert_allclose(demo.model.geom("A_forearm_collision").size, collision_before)
+        np.testing.assert_allclose(
+            demo.model.geom("A_forearm_warning").size - collision_before,
+            (0.05, 0.05, 0.05),
+        )
 
     def test_home_pose_has_no_warning_envelope_overlap(self):
         self.assertEqual(self.demo._warning_envelope_overlaps(self.demo.data), [])

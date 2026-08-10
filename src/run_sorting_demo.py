@@ -7,6 +7,7 @@ grasped only after a finger pad reports a physical MuJoCo contact.
 from __future__ import annotations
 
 import argparse
+import copy
 import ctypes
 import random
 import sys
@@ -19,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from central_coordinator import ArmId, ArmState, CentralCoordinator, ObjectClass, ObjectObservation
+from bayesian_joint_planner import BayesianJointGame, JointStrategyEvidence
 from run_sorting_line import (
     BELT_SPEED_MPS,
     CONVEYOR_LOOP_LENGTH_M,
@@ -73,10 +75,11 @@ class DemoParameters:
     feed_interval_s: float = 7.5
     max_active_parts: float = 2.0
     simulation_speed: float = 1.0
+    warning_margin_m: float = 0.10
 
 
-CSPR_ALGORITHM_ID = "cspr"
-CSPR_ALGORITHM_NAME = "CSPR - Centralized Spatiotemporal Reservation"
+CSPR_ALGORITHM_ID = "bc_jsp"
+CSPR_ALGORITHM_NAME = "BC-JSP - Bayesian Centralized Joint Strategy Planner"
 # Tool x: jaw closing direction, y: vertical finger length, z: conveyor approach.
 GRASP_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
 
@@ -108,6 +111,8 @@ class ArmMission:
     trajectory: list[tuple[float, np.ndarray, float]] | None = None
     stage_start_qpos: np.ndarray | None = None
     release_started: bool = False
+    route_variant: str = "direct"
+    joint_strategy: tuple[str, str] | None = None
 
     @property
     def done(self) -> bool:
@@ -212,7 +217,10 @@ def make_demo_items(seed: int, feed_interval_s: float) -> list[DemoItem]:
         # Physical feed is paced below the measured service rate. Concurrent
         # MIDDLE allocation remains covered independently by coordinator tests.
         spawn_time_s = 0.2 + (index - 1) * feed_interval_s
-        spawn_y = 2.30 if index == 2 else 1.20
+        # Every part is created on the physical head segment. With short GUI
+        # feed intervals this lets the rolling horizon observe two moving
+        # objects together instead of parking part 02 outside both workspaces.
+        spawn_y = 1.20
         spawn_z = 0.16 if index == 8 else 0.13
         items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), spawn_y, spawn_z), 30.0))
     return items
@@ -250,6 +258,7 @@ class SortingDemo:
         self.paused = False
         self.latest_decision: dict[str, object] = {"assignments": [], "rejected": {}}
         self.last_preflight: dict[str, object] = {"status": "pending", "reason": "waiting_for_task"}
+        self.latest_joint_plan: dict[str, object] = {"status": "pending", "evaluated": 0}
         self.event_log: list[dict[str, object]] = []
         self._reset_state()
 
@@ -267,6 +276,7 @@ class SortingDemo:
             )
             for arm in ArmId
         }
+        self._apply_warning_margin()
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
@@ -298,6 +308,12 @@ class SortingDemo:
         self.output_offsets = {"left_bin": 0, "right_bin": 0}
         self.latest_decision = {"assignments": [], "rejected": {}}
         self.last_preflight = {"status": "pending", "reason": "waiting_for_task"}
+        self.latest_joint_plan = {"status": "pending", "evaluated": 0}
+        # Preserve learned route beliefs across GUI replay/settings changes;
+        # constructing a new SortingDemo still starts from the documented prior.
+        if not hasattr(self, "bayesian_game"):
+            self.bayesian_game = BayesianJointGame()
+        self.joint_result_buffer: dict[tuple[str, str], list[bool]] = {}
         self.event_log = []
         self.arm_outcomes = {arm: {"attempts": 0, "grasped": 0, "placed": 0, "cycle_s": self.parameters.fixed_cycle_s} for arm in ArmId}
         for index, name in enumerate(PART_NAMES):
@@ -352,9 +368,9 @@ class SortingDemo:
         with self.state_lock:
             if "algorithm" in values:
                 algorithm_id = str(values["algorithm"])
-                if algorithm_id != CSPR_ALGORITHM_ID:
+                if algorithm_id not in (CSPR_ALGORITHM_ID, "cspr"):
                     raise ValueError("This algorithm is reserved for a future implementation")
-                self.algorithm_id = algorithm_id
+                self.algorithm_id = CSPR_ALGORITHM_ID
             if "seed" in values:
                 self.seed = int(values["seed"])
             for field_name in asdict(self.parameters):
@@ -362,6 +378,8 @@ class SortingDemo:
                     value = float(values[field_name])
                     if value <= 0.0:
                         raise ValueError(f"{field_name} must be positive")
+                    if field_name == "warning_margin_m" and not 0.02 <= value <= 0.30:
+                        raise ValueError("warning_margin_m must be between 0.02 and 0.30")
                     setattr(self.parameters, field_name, value)
         self.request_reset()
 
@@ -381,6 +399,7 @@ class SortingDemo:
                     "object_id": mission.object_id,
                     "stage": mission.keyframes[mission.keyframe_index][0],
                     "placement_zone": mission.placement_zone,
+                    "route": mission.route_variant,
                 }
                 for arm, mission in self.missions.items()
                 if not mission.done
@@ -406,8 +425,9 @@ class SortingDemo:
                 "deferred": [item.object_id for item in self.deferred_assignments.values()],
                 "decision": self.latest_decision,
                 "preflight": self.last_preflight,
+                "joint_plan": self.latest_joint_plan,
                 "safety": {
-                    "warning_margin_m": 0.10,
+                    "warning_margin_m": round(float(self.parameters.warning_margin_m), 3),
                     "mode": "concurrent_mission_preflight",
                 },
                 "events": self.event_log[-12:],
@@ -464,6 +484,15 @@ class SortingDemo:
         """Test two oriented warning boxes with MuJoCo's native distance query."""
         return mujoco.mj_geomDistance(self.model, data, first_id, second_id, 10.0, None) <= 0.0
 
+    def _apply_warning_margin(self) -> None:
+        """Resize visual warning boxes without changing physical collision geometry."""
+        margin = self.parameters.warning_margin_m
+        for arm in ArmId:
+            for region in ("upper_arm", "forearm", "gripper"):
+                collision_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_collision")
+                warning_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_warning")
+                self.model.geom_size[warning_id] = self.model.geom_size[collision_id] + margin
+
     def _warning_envelope_overlaps(self, data: mujoco.MjData) -> list[tuple[str, str]]:
         """Detect A/B overlap using three expanded safety boxes per arm."""
         overlaps: list[tuple[str, str]] = []
@@ -501,28 +530,114 @@ class SortingDemo:
                     return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
         return True, "clear"
 
+    def _preflight_joint_pair(self, first: ArmMission, second: ArmMission) -> tuple[bool, str]:
+        """Validate both predicted trajectories on one dense simulation clock."""
+        trial = mujoco.MjData(self.model)
+        start_s = min(first.trajectory[0][0], second.trajectory[0][0])
+        end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
+        for at_s in np.arange(start_s, end_s + 0.001, 0.10):
+            trial.qpos[:] = self.data.qpos
+            for mission in (first, second):
+                qpos, opening = self._mission_pose_at(mission, float(at_s))
+                kin = self.kinematics[mission.arm]
+                trial.qpos[kin.qpos_addresses] = qpos
+                trial.qpos[kin.finger_qpos_addresses] = opening
+            mujoco.mj_forward(self.model, trial)
+            contacts = self._forbidden_contacts(trial)
+            if contacts:
+                return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
+            overlaps = self._warning_envelope_overlaps(trial)
+            if overlaps:
+                return False, f"time={at_s:.2f}: safety_envelope {overlaps[0][0]} / {overlaps[0][1]}"
+        return True, "clear"
+
     def _mission_pose_at(self, mission: ArmMission, at_s: float) -> tuple[np.ndarray, float]:
         """Return the executor's reserved pose for an absolute simulation time."""
         trajectory = mission.trajectory or []
         if not trajectory:
             kin = self.kinematics[mission.arm]
             return self.data.qpos[kin.qpos_addresses].copy(), GRIP_OPEN_M
-        for sample_time, qpos, opening in trajectory:
-            if sample_time >= at_s:
-                return qpos, opening
+        if at_s <= trajectory[0][0]:
+            return trajectory[0][1], trajectory[0][2]
+        for previous, following in zip(trajectory, trajectory[1:]):
+            if following[0] >= at_s:
+                ratio = (at_s - previous[0]) / max(following[0] - previous[0], CONTROL_STEP_S)
+                return interpolate(previous[1], following[1], ratio), float(previous[2] + (following[2] - previous[2]) * ratio)
         return trajectory[-1][1], trajectory[-1][2]
 
     def _build_trajectory(self, arm: ArmId, keyframes: list[tuple[str, float, np.ndarray, float]]) -> list[tuple[float, np.ndarray, float]]:
         kin = self.kinematics[arm]
         previous = self.data.qpos[kin.qpos_addresses].copy()
         at_s = float(self.data.time)
-        samples: list[tuple[float, np.ndarray, float]] = []
+        opening = float(np.mean(self.data.qpos[kin.finger_qpos_addresses]))
+        samples: list[tuple[float, np.ndarray, float]] = [(at_s, previous.copy(), opening)]
         for _, duration, target, opening in keyframes:
             for ratio in np.linspace(0.2, 1.0, 5):
                 samples.append((at_s + duration * float(ratio), interpolate(previous, target, float(ratio)), opening))
             at_s += duration
             previous = target
         return samples
+
+    def _route_candidates(self, mission: ArmMission) -> list[ArmMission]:
+        """Generate three equal-peer route actions for the Bayesian game."""
+        variants: list[ArmMission] = []
+        escape_qpos = {
+            ArmId.A: np.array((-2.1728, -0.2902, -1.8000, 2.5770, 4.0202, -6.1516)),
+            ArmId.B: np.array((3.3961, 1.7425, -1.3483, 0.0000, 1.9187, 0.0000)),
+        }[mission.arm]
+        for name, duration_scale, escape_duration in (
+            ("direct", 1.00, 0.0),
+            ("balanced", 1.12, 2.4),
+            ("outer", 1.28, 3.2),
+        ):
+            candidate = copy.deepcopy(mission)
+            candidate.route_variant = name
+            task_frames = [(stage, duration * duration_scale, qpos.copy(), opening) for stage, duration, qpos, opening in mission.keyframes]
+            if escape_duration:
+                task_frames.insert(0, (f"{name}_escape", escape_duration, escape_qpos.copy(), GRIP_OPEN_M))
+            candidate.keyframes = task_frames
+            candidate.keyframe_index = 0
+            candidate.keyframe_started_s = float(self.data.time)
+            candidate.trajectory = self._build_trajectory(candidate.arm, candidate.keyframes)
+            candidate.stage_start_qpos = self.data.qpos[self.kinematics[candidate.arm].qpos_addresses].copy()
+            variants.append(candidate)
+        return variants
+
+    def _joint_evidence(self, first: ArmMission, second: ArmMission) -> JointStrategyEvidence:
+        safe, reason = self._preflight_joint_pair(first, second)
+        start_s = min(first.trajectory[0][0], second.trajectory[0][0])
+        end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
+        times = np.arange(start_s, end_s + 0.001, 0.10)
+        previous: dict[ArmId, np.ndarray] = {}
+        moving_together = 0
+        path_length = 0.0
+        for at_s in times:
+            moving: dict[ArmId, bool] = {}
+            for mission in (first, second):
+                qpos, _ = self._mission_pose_at(mission, float(at_s))
+                old = previous.get(mission.arm, qpos)
+                delta = float(np.linalg.norm(qpos - old))
+                path_length += delta
+                moving[mission.arm] = delta > 1e-4
+                previous[mission.arm] = qpos
+            moving_together += int(all(moving.values()))
+        simultaneous_ratio = moving_together / max(1, len(times) - 1)
+        grasp = {
+            arm: (self.arm_outcomes[arm]["grasped"] + 1.0) / (self.arm_outcomes[arm]["attempts"] + 2.0)
+            for arm in ArmId
+        }
+        by_arm = {first.arm: first, second.arm: second}
+        return JointStrategyEvidence(
+            route_a=by_arm[ArmId.A].route_variant,
+            route_b=by_arm[ArmId.B].route_variant,
+            collision_free=safe,
+            makespan_s=end_s - start_s,
+            simultaneous_ratio=simultaneous_ratio,
+            path_length_rad=path_length,
+            grasp_probability_a=grasp[ArmId.A],
+            grasp_probability_b=grasp[ArmId.B],
+            rejection_reason="" if safe else reason,
+        )
 
     def _pose_is_safe(self, arm: ArmId, qpos: np.ndarray, gripper_opening: float | None = None) -> bool:
         kin = self.kinematics[arm]
@@ -546,7 +661,9 @@ class SortingDemo:
 
     def _tool_arm_states(self) -> tuple[ArmState, ArmState]:
         return tuple(
-            ArmState(arm, tuple(self.kinematics[arm].tool_position()), 1.55, 999.0 if arm in self.missions or arm in self.deferred_assignments else 0.0)
+            # The screening radius includes the vertical approach posture; the
+            # subsequent IK and MuJoCo collision checks remain authoritative.
+            ArmState(arm, tuple(self.kinematics[arm].tool_position()), 1.80, 999.0 if arm in self.missions or arm in self.deferred_assignments else 0.0)
             for arm in ArmId
         )
 
@@ -670,7 +787,23 @@ class SortingDemo:
             return
         self.last_schedule_s = self.data.time
         self._start_safe_deferred_assignments()
-        decision = self.coordinator.decide(self.data.time, self._available_observations(), self._tool_arm_states())
+        observations = self._available_observations()
+        # Avoid a Braess-like local greedy commitment: when the feed is faster
+        # than one service cycle, retain a lone object briefly so the imminent
+        # peer can enter the 3 x 3 joint-strategy game with it.
+        future_arrivals = [item.spawn_time_s for item in self.items if item.part_name not in self.spawned]
+        should_batch = (
+            not self.missions
+            and not self.deferred_assignments
+            and len(observations) == 1
+            and self.parameters.feed_interval_s < self.coordinator.fixed_cycle_s
+            and future_arrivals
+            and min(future_arrivals) - self.data.time <= self.parameters.feed_interval_s + SCHEDULER_PERIOD_S
+        )
+        if should_batch:
+            self.latest_decision = {"assignments": [], "rejected": {}, "status": "batching_for_joint_game"}
+            return
+        decision = self.coordinator.decide(self.data.time, observations, self._tool_arm_states())
         if decision.assignments:
             self.latest_decision = {
                 "assignments": [
@@ -687,7 +820,11 @@ class SortingDemo:
                 ],
                 "rejected": decision.rejected,
             }
-        for assignment in decision.assignments:
+        available = [item for item in decision.assignments if not self._object_is_claimed(item.object_id)]
+        if len(available) == 2 and all(item.arm not in self.missions for item in available):
+            self._start_joint_assignments(available)
+            return
+        for assignment in available:
             if self._object_is_claimed(assignment.object_id):
                 continue
             if self._may_enter_assignment(assignment):
@@ -695,6 +832,64 @@ class SortingDemo:
             else:
                 self.deferred_assignments[assignment.arm] = assignment
                 self._log("reserve_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="central_corridor")
+
+    def _start_joint_assignments(self, assignments) -> None:
+        """Evaluate the 3 x 3 Bayesian joint-strategy game and start both arms."""
+        bases = [self._plan_mission(item.arm, item.object_id, item.placement_zone) for item in assignments]
+        candidates = {mission.arm: self._route_candidates(mission) for mission in bases}
+        evidence: list[JointStrategyEvidence] = []
+        mission_pairs: dict[tuple[str, str], tuple[ArmMission, ArmMission]] = {}
+        for first in candidates[ArmId.A]:
+            for second in candidates[ArmId.B]:
+                item = self._joint_evidence(first, second)
+                evidence.append(item)
+                mission_pairs[(item.route_a, item.route_b)] = (first, second)
+        selected = self.bayesian_game.choose(evidence)
+        rejected = sum(not item.collision_free for item in evidence)
+        if selected is None:
+            self.latest_joint_plan = {
+                "status": "no_safe_joint_strategy",
+                "evaluated": len(evidence),
+                "rejected": rejected,
+                "reason": evidence[0].rejection_reason if evidence else "no_candidates",
+            }
+            # All nine joint actions are unsafe. Admit one screened mission so
+            # the line still makes progress and defer its equal peer.
+            first, second = assignments
+            self._start_assignment(first)
+            self.deferred_assignments[second.arm] = second
+            self._log("joint_defer", evaluated=len(evidence), reason="all_joint_routes_unsafe")
+            return
+
+        chosen = selected.evidence
+        pair = mission_pairs[(chosen.route_a, chosen.route_b)]
+        strategy = (chosen.route_a, chosen.route_b)
+        for mission in pair:
+            mission.joint_strategy = strategy
+            self.missions[mission.arm] = mission
+            self.arm_outcomes[mission.arm]["attempts"] += 1
+            self._log(
+                "assign",
+                object_id=mission.object_id,
+                arm=mission.arm.value,
+                placement=mission.placement_zone,
+                route=mission.route_variant,
+            )
+        self.last_preflight = {"status": "clear", "reason": "joint_trajectory_clear"}
+        self.latest_joint_plan = {
+            "status": "selected",
+            "evaluated": len(evidence),
+            "rejected": rejected,
+            "route_a": chosen.route_a,
+            "route_b": chosen.route_b,
+            "completion_probability": round(selected.completion_probability, 4),
+            "collision_probability": round(selected.collision_probability, 4),
+            "expected_utility": round(selected.expected_utility, 3),
+            "makespan_s": round(chosen.makespan_s, 3),
+            "simultaneous_ratio": round(chosen.simultaneous_ratio, 4),
+            "path_length_rad": round(chosen.path_length_rad, 3),
+        }
+        self._log("joint_plan", **self.latest_joint_plan)
 
     def _may_enter_assignment(self, assignment) -> bool:
         # Shared work is not serialized by a LEFT/RIGHT/MIDDLE label.  The
@@ -797,7 +992,8 @@ class SortingDemo:
             if mission.done:
                 kin.set_pad_adhesion(0.0)
                 self.missions.pop(arm)
-                if not mission.failed and self._part_is_in_target_bin(mission.object_id, mission.placement_zone):
+                placement_success = not mission.failed and self._part_is_in_target_bin(mission.object_id, mission.placement_zone)
+                if placement_success:
                     self.placed.add(mission.object_id)
                     self.arm_outcomes[arm]["placed"] += 1
                     self._log("place", object_id=mission.object_id, placement=mission.placement_zone)
@@ -805,11 +1001,31 @@ class SortingDemo:
                     self.missed.add(mission.object_id)
                     self._log("missed", object_id=mission.object_id, reason="placement_not_verified", part_xyz=np.round(self.data.qpos[self.qpos_addresses[mission.object_id] : self.qpos_addresses[mission.object_id] + 3], 3).tolist())
                 self.coordinator.mark_completed(mission.object_id)
+                self._record_joint_outcome(mission, placement_success)
                 measured_cycle_s = self.data.time - mission.assigned_at_s
                 arm_feedback = self.arm_outcomes[arm]
                 arm_feedback["cycle_s"] = 0.8 * arm_feedback["cycle_s"] + 0.2 * measured_cycle_s
                 self.coordinator.fixed_cycle_s = float(np.mean([item["cycle_s"] for item in self.arm_outcomes.values()]))
                 self._log("cycle_feedback", arm=arm.value, cycle_s=round(measured_cycle_s, 2), estimate_s=round(self.coordinator.fixed_cycle_s, 2))
+
+    def _record_joint_outcome(self, mission: ArmMission, success: bool) -> None:
+        if mission.joint_strategy is None:
+            return
+        outcomes = self.joint_result_buffer.setdefault(mission.joint_strategy, [])
+        outcomes.append(success)
+        if len(outcomes) < 2:
+            return
+        joint_success = all(outcomes)
+        self.bayesian_game.update(*mission.joint_strategy, joint_success)
+        posterior = self.bayesian_game.belief_for(*mission.joint_strategy).mean
+        self._log(
+            "bayes_update",
+            route_a=mission.joint_strategy[0],
+            route_b=mission.joint_strategy[1],
+            success=joint_success,
+            posterior=round(posterior, 4),
+        )
+        self.joint_result_buffer.pop(mission.joint_strategy, None)
 
     def _confirm_grasp(self, arm: ArmId, mission: ArmMission) -> bool:
         """Accept a grasp only after a physical finger-pad contact is reported."""

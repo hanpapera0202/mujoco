@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.5.3`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.6.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -37,9 +37,9 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 
 `src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。皮帶有效寬度為 45 cm，固定 seed 的全部工件都從中央共享帶進入，皮帶速度為 `0.12 m/s`。兩台 Nova5 基座位於 x = +/-0.58 m。中央協調器安排任務後，手臂以 6D 姿態 IK 依序執行接近、下降、閉合、抬升、移至托盤、放開與回原位。只有 MuJoCo 回報雙側指墊實體接觸才算抓取成功，不使用 weld/equality constraint，且放置必須由工件最後落入目標托盤驗證。
 
-目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。執行器會以實測週期回授更新派工估計、限制投料負載，並在相同時間軸上預檢候選與既有手臂的關節路徑。抓取需雙側指墊同時接觸，且不使用 weld；最後仍須通過托盤位置驗證才列為成功。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
+目前演算法名稱為 **BC-JSP（Bayesian Centralized Joint Strategy Planner，貝式集中聯合策略規劃）**。CSPR 保留為低成本硬條件快篩；兩臂皆可用時，BC-JSP 對每臂三條路徑形成的 9 組聯合策略做共同時間軸碰撞預檢，再以 Beta-Bernoulli 後驗的完工機率、總工期、同步率與路徑長度計算期望效用。控制台可調碰撞警戒盒的外擴距離，預設仍為 10 cm；實體碰撞盒不會隨之縮放。
 
-啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可開始、暫停、重播、開啟或重新顯示 MuJoCo、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉 MuJoCo 視窗後，控制服務仍會保留同一場演示，按「開始 / 繼續」即可重新開啟。MuJoCo 視窗聚焦後按 `R` 也會重播。
+啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可開始、暫停、重播、開啟或重新顯示 MuJoCo、修改 seed、調整皮帶/演示速度、碰撞警戒外擴距離與中央協調器參數，並查看 9 組聯合策略的選擇結果、後驗完工機率、A/B 任務、拒絕原因與事件紀錄。關閉 MuJoCo 視窗後，控制服務仍會保留同一場演示，按「開始 / 繼續」即可重新開啟。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
 演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。
 

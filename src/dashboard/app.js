@@ -31,12 +31,21 @@ function render(state) {
   armRows.unshift(`<strong>產線負載</strong><span>線上 ${feedback.active_parts ?? 0} 件</span><span>中央週期估計 ${(feedback.cycle_estimate_s ?? 0).toFixed(2)} s</span>`);
   setRows(document.querySelector('#feedback'), armRows, '尚無執行回饋。');
   if (!initialized) { fields.forEach(field => field.value = field.name === 'seed' ? state.seed : state.parameters[field.name]); algorithmSelect.value = state.algorithm.id; initialized = true; }
-  const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)}</span>`);
+  const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)} · ${task.route || 'direct'}</span>`);
   setRows(document.querySelector('#missions'), missions, '兩台手臂皆可接收任務。');
   document.querySelector('#deferred').textContent = state.deferred.length ? `安全等待：${state.deferred.join('、')} 正等待中央走廊淨空。` : '';
   const check = state.preflight || {};
   document.querySelector('#preflight').textContent = check.status === 'clear' ? `路徑碰撞預檢：通過（${check.object_id} / 手臂 ${check.arm}）` : check.status === 'deferred' ? `路徑碰撞預檢：暫緩，${check.reason}` : '路徑碰撞預檢：等待任務';
   document.querySelector('#algorithm-name').textContent = state.algorithm.name;
+  const joint = state.joint_plan || {};
+  const jointRows = joint.status === 'selected' ? [
+    `<strong>聯合策略</strong><span>A=${joint.route_a} · B=${joint.route_b}</span><span>評估 ${joint.evaluated} 組</span>`,
+    `<strong>貝式期望</strong><span>完工機率 ${(100 * joint.completion_probability).toFixed(1)}%</span><span>效用 ${joint.expected_utility}</span>`,
+    `<strong>全局成本</strong><span>工期 ${joint.makespan_s.toFixed(2)} s</span><span>同步率 ${(100 * joint.simultaneous_ratio).toFixed(1)}%</span>`
+  ] : joint.status === 'no_safe_joint_strategy' ? [
+    `<strong>無安全聯合解</strong><span>9 組已全數檢查</span><span>${joint.reason}</span>`
+  ] : [];
+  setRows(document.querySelector('#joint-plan'), jointRows, '等待兩件物體進入聯合決策。');
   const assignments = state.decision.assignments.map(task => `<strong>${task.object_id}</strong><span>手臂 ${task.arm} · ${label(task.zone)}</span><span>${label(task.placement)}</span>`);
   setRows(document.querySelector('#assignments'), assignments, '最新一輪沒有可行派工。');
   document.querySelector('#rejected').textContent = JSON.stringify(state.decision.rejected, null, 2);

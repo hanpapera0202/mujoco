@@ -6,7 +6,7 @@
 
 | ID | 狀態 | 需求 | 自動驗證 |
 |---|---|---|---|
-| ARCH-01 | PASS | 兩台 Nova5 由同一個集中式 CSPR 協調，沒有主從手臂 | `test_central_coordinator.py` |
+| ARCH-01 | PASS | 兩台 Nova5 由同一個集中式 BC-JSP 協調，沒有主從手臂；CSPR 作為快速硬條件篩選層 | `test_central_coordinator.py`、`test_bayesian_joint_planner.py` |
 | PAR-01 | ARCHIVED v0.4 | 固定 seed 42 的第一對左右物件由 A、B 同時執行 | Git tag `v0.4.0` |
 | GRASP-01 | PASS | 抓取必須同時接觸左右兩個實體指墊 | `test_sorting_demo_regression.py` |
 | GRASP-02 | PASS | 抓取不得啟用 weld/equality constraint，也不得瞬移物件 | `test_sorting_demo_regression.py` |
@@ -17,8 +17,12 @@
 | GUI-01 | PASS | 中文控制台可開啟或重新開啟對應的 MuJoCo 視窗；開始動作會同時開啟視窗 | `test_demo_dashboard.py` |
 | LINE-01 | PASS | v0.5 產線有效皮帶寬度為 45 cm，兩台 Nova5 基座位於 x = +/-0.58 m | `test_narrow_middle_scenario.py` |
 | ALLOC-01 | PASS | v0.5 的 10 件皆為 MIDDLE；完全同分首件 A 優先，後續按負載維持平行權限 | `test_central_coordinator.py`、`test_narrow_middle_scenario.py` |
-| SAFE-02 | PASS | 每臂以上臂、前臂、夾爪三個長方體作粗略模型，雙臂活動預警區由盒體各面外擴 10 cm | `test_narrow_middle_scenario.py` |
+| SAFE-02 | PASS | 每臂以上臂、前臂、夾爪三個長方體作粗略模型；預警外擴可由 GUI 調整且不改實體盒，預設 10 cm | `test_narrow_middle_scenario.py` |
 | PAR-02 | OPEN | 全 MIDDLE 動態產線提高雙臂同時運動比例；目前 10 cm 領域會讓部分中央預約等待 | 待新增重疊時間指標與協調路徑 |
+| JOINT-01 | PASS | 中央處理器比較 A/B 各三條路徑的 9 組聯合策略，不固定讓路手臂；可拒絕兩條局部最短路徑 | `test_bayesian_joint_planner.py` |
+| JOINT-02 | OPEN | 可行聯合方案中兩臂須同時運動；只允許減速，除非所有聯合候選皆不安全才可停止 | 待新增雙臂速度重疊指標 |
+| JOINT-03 | PASS | 聯合路徑先通過三盒碰撞硬限制，再依貝式完工機率、總工期、同動比例與路徑長度計算效用 | `test_bayesian_joint_planner.py`、`test_narrow_middle_scenario.py` |
+| BAYES-01 | PASS | 路徑安全不確定性以 Beta-Bernoulli 信念表示，成功或失敗證據可更新後驗 | `test_bayesian_joint_planner.py` |
 
 ## 新需求加入方式
 

@@ -1,6 +1,24 @@
 # 中央協調演算法：數學、程式與修改指南
 
-這份文件描述第一版的高階協調器，命名為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。它不直接控制關節；MuJoCo 演示執行器在收到任務後，以位置 IK 完成取放。所有手臂在中央端是平等的，不存在主從關係。GUI 已預留 Deadline-first、Hungarian、Fuzzy 的切換欄位；目前只有 CSPR 已實作。
+這份文件描述 **BC-JSP（Bayesian Centralized Joint Strategy Planner，貝式集中聯合策略規劃）**。CSPR 仍負責低成本快篩，BC-JSP 再處理兩臂聯合路徑。所有手臂在中央端平權，不存在主從關係。
+
+## v0.6 不完全資訊貝式博弈
+
+每臂提出三個動作 $R_a=\{direct,balanced,outer\}$，聯合策略集合為 $S=R_A\times R_B$，所以每輪固定只評估 9 組。MuJoCo 先在共同時間軸檢查實體碰撞與可調警戒盒；不安全策略直接令 $F_s=0$，權重不能覆蓋硬限制。
+
+對尚未被有限取樣完全觀察的路徑安全事件，使用 Beta-Bernoulli 信念：
+
+$$\theta_s\sim Beta(\alpha_s,\beta_s),\qquad E[\theta_s]=\frac{\alpha_s}{\alpha_s+\beta_s}.$$
+
+成功證據令 $\alpha_s\leftarrow\alpha_s+1$，失敗、掉落或安全中止令 $\beta_s\leftarrow\beta_s+1$。策略完工機率為：
+
+$$P_{finish}(s)=F_s E[\theta_s]q_Aq_B.$$
+
+第一版的可解釋期望效用為：
+
+$$U(s)=1000P_{finish}(s)-12T_{max}(s)+30\rho_{sim}(s)-0.25L(s)-400P_{collision}(s).$$
+
+$T_{max}$ 是總完工時間，$\rho_{sim}$ 是兩臂同時有非零關節運動的取樣比例，$L$ 是兩臂總關節路徑長度。中央選擇 $s^*=\arg\max_{s\in S}U(s)$，因此可同時拒絕兩臂各自的局部最短路徑，避免局部貪婪造成類似布雷斯悖論的全局壅塞。若 9 組皆不安全，才退回單臂執行並保留另一任務。
 
 ## v0.3 回授式執行修正
 
