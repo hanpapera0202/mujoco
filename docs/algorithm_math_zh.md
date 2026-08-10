@@ -2,6 +2,16 @@
 
 這份文件描述第一版的高階協調器，命名為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。它不直接控制關節；MuJoCo 演示執行器在收到任務後，以位置 IK 完成取放。所有手臂在中央端是平等的，不存在主從關係。GUI 已預留 Deadline-first、Hungarian、Fuzzy 的切換欄位；目前只有 CSPR 已實作。
 
+## v0.3 回授式執行修正
+
+對手臂 $a$ 的每次完整任務量測 $T_a^{(k)}$，中央週期以指數移動平均更新：
+
+$$\hat T_a \leftarrow 0.8\hat T_a + 0.2T_a^{(k)},\qquad \hat T=(\hat T_A+\hat T_B)/2.$$
+
+投料必須滿足 $\lambda \leq \mu_A+\mu_B$，其中 $\lambda=1/\text{feed\_interval}$、$\mu_a=1/\hat T_a$。控制台因此提供投料間隔及最大線上物件數；超過負載的工件會留在上游。
+
+候選任務建立關節時序預約 $\mathcal R_i=\{(t_j,q_i(t_j),g_i(t_j))\}$。中央端在同一 $t_j$ 同時套用候選與既有手臂姿態，僅於 $\forall t_j:C(q_A(t_j),q_B(t_j))=0$ 時放行。抓取硬條件為兩個指墊都接觸目標：$G_i=\mathbf1[F_{i,L}\cap O\ne\varnothing]\mathbf1[F_{i,R}\cap O\ne\varnothing]$。抓取 weld 已移除，放置只有通過輸出托盤空間驗證才計為成功。
+
 ## 1. 集合與狀態
 
 在時間 `t`，可見且尚未承諾的物件集合為 `O_t`，手臂集合為 `A={A,B}`。每件物件 `o` 有位置 `p_o`、到流水線尾端的剩餘期限 `D_o`、類別 `c_o in {LEFT,MIDDLE,RIGHT}`，以及每台手臂的預測抓取成功率 `q_{a,o}`。

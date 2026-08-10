@@ -23,6 +23,8 @@
         <label>隨機種子 Seed<input name="seed" type="number" step="1" required></label>
         <label>演示速度<input name="simulation_speed" type="number" min="0.1" max="4" step="0.1" required></label>
         <label>皮帶速度 (m/s)<input name="belt_speed_mps" type="number" min="0.02" max="0.5" step="0.01" required></label>
+        <label>投料間隔 (s)<input name="feed_interval_s" type="number" min="1" max="30" step="0.1" required></label>
+        <label>最大線上物件數<input name="max_active_parts" type="number" min="1" max="10" step="1" required></label>
         <h1>演算法</h1>
         <label>協調方法
           <select name="algorithm" id="algorithm">
@@ -33,10 +35,10 @@
           </select>
         </label>
         <h1>中央協調器</h1>
-        <label>滾動視窗 (s)<input name="horizon_s" type="number" min="0.5" max="15" step="0.1" required></label>
+        <label>滾動視窗 (s)<input name="horizon_s" type="number" min="0.5" max="30" step="0.1" required></label>
         <label>雙臂並行加分<input name="parallel_bonus" type="number" min="0.1" max="20" step="0.1" required></label>
         <label>預估取件速度 (m/s)<input name="pick_speed_mps" type="number" min="0.1" max="2" step="0.05" required></label>
-        <label>固定週期時間 (s)<input name="fixed_cycle_s" type="number" min="0.1" max="5" step="0.1" required></label>
+        <label>初始週期估計 (s)<input name="fixed_cycle_s" type="number" min="0.1" max="20" step="0.1" required></label>
         <label>期限權重<input name="urgency_weight" type="number" min="0.1" max="20" step="0.1" required></label>
         <label>成功率權重<input name="success_weight" type="number" min="0.1" max="20" step="0.1" required></label>
         <label>移動距離權重<input name="travel_weight" type="number" min="0.01" max="10" step="0.01" required></label>
@@ -49,6 +51,7 @@
         <div><span>已放置</span><strong id="placed">0</strong></div>
         <div><span>漏件</span><strong id="missed">0</strong></div>
       </div>
+      <section class="panel"><h2>執行回饋</h2><div id="feedback" class="rows"></div></section>
       <section class="panel"><h2>手臂任務</h2><div id="missions" class="rows"></div><p id="deferred"></p><p id="preflight"></p></section>
       <section class="panel"><h2>目前演算法</h2><div id="algorithm-name"></div></section>
       <section class="panel"><h2>最新中央派工</h2><div id="assignments" class="rows"></div><details><summary>拒絕候選</summary><pre id="rejected"></pre></details></section>

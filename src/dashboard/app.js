@@ -2,7 +2,7 @@ const fields = [...document.querySelectorAll('#settings input')];
 const algorithmSelect = document.querySelector('#algorithm');
 let initialized = false;
 const zh = {
-  approach: '接近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', retreat: '撤離', home: '回原位',
+  approach: '接近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', settle: '放置穩定', retreat: '撤離', home: '回原位',
   infeed: '投料', assign: '派工', reserve_wait: '安全等待', grasp: '抓取', release: '鬆開', place: '放置', missed: '漏件', safety_recover: '安全回復', safety_stop: '安全停止',
   left_bin: '左側托盤', right_bin: '右側托盤', shared_middle: '共享中間區', exclusive_left: '左側專屬區', exclusive_right: '右側專屬區',
   middle: '中間件', left: '左側件', right: '右側件', tail_exit: '尾端離開'
@@ -23,6 +23,10 @@ function render(state) {
   document.querySelector('#connection').textContent = state.paused ? '已暫停' : '運行中';
   document.querySelector('#sim-time').textContent = `${state.time_s.toFixed(3)} s`;
   ['spawned', 'placed', 'missed'].forEach(key => document.querySelector(`#${key}`).textContent = state.counts[key]);
+  const feedback = state.feedback || {};
+  const armRows = Object.entries(feedback.arms || {}).map(([arm, value]) => `<strong>手臂 ${arm}</strong><span>週期 ${value.cycle_s.toFixed(2)} s</span><span>抓取 ${value.grasped}/${value.attempts} · 放置 ${value.placed}</span>`);
+  armRows.unshift(`<strong>產線負載</strong><span>線上 ${feedback.active_parts ?? 0} 件</span><span>中央週期估計 ${(feedback.cycle_estimate_s ?? 0).toFixed(2)} s</span>`);
+  setRows(document.querySelector('#feedback'), armRows, '尚無執行回饋。');
   if (!initialized) { fields.forEach(field => field.value = field.name === 'seed' ? state.seed : state.parameters[field.name]); algorithmSelect.value = state.algorithm.id; initialized = true; }
   const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)}</span>`);
   setRows(document.querySelector('#missions'), missions, '兩台手臂皆可接收任務。');

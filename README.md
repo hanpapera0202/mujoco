@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.2.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.3.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -37,7 +37,7 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 
 `src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。固定 seed 先產生 `LEFT` 與 `RIGHT` 工件以供雙臂並行，再交錯產生共享區 `MIDDLE` 工件；皮帶速度為 `0.24 m/s`。中央協調器安排共享區與專屬區任務，再讓兩台 Nova5 以 6D 姿態 IK 維持水平雙指、垂直指面的抓取姿態，依序執行接近、下降、夾爪閉合、抬升、移至實體托盤、放開與回原位。只有 MuJoCo 回報指墊與工件的實體接觸才會啟用夾持約束；接觸前工件完全由輸送帶物理運動，放開時立即解除約束，且放置必須由工件最後落入目標托盤的範圍驗證。
 
-目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。若另一手臂正在中央走廊的接近、下降、閉合或抬升階段，`MIDDLE` 任務會先保持預約並在控制台顯示「安全等待」，等中央走廊淨空才啟動；MuJoCo 另有 A/B 接觸偵測，偵測到跨手臂接觸會立即暫停。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
+目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。執行器會以實測週期回授更新派工估計、限制投料負載，並在相同時間軸上預檢候選與既有手臂的關節路徑。抓取需雙側指墊同時接觸，且不使用 weld；最後仍須通過托盤位置驗證才列為成功。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
 
 啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
