@@ -1,5 +1,6 @@
 const fields = [...document.querySelectorAll('#settings input')];
 const algorithmSelect = document.querySelector('#algorithm');
+const settingsStatus = document.querySelector('#settings-status');
 let initialized = false;
 const zh = {
   approach: '接近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', settle: '放置穩定', retreat: '撤離', home: '回原位',
@@ -47,5 +48,13 @@ document.querySelector('#restart').onclick = () => control('restart').then(rende
 document.querySelector('#pause').onclick = () => control('pause').then(render);
 document.querySelector('#resume').onclick = () => control('start').then(render).catch(error => window.alert(error.message));
 document.querySelector('#open-mujoco').onclick = () => control('open_mujoco').then(render).catch(error => window.alert(error.message));
-document.querySelector('#settings').onsubmit = event => { event.preventDefault(); const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)])); values.algorithm = algorithmSelect.value; control('settings', values).then(render).catch(error => window.alert(error.message)); };
+fields.forEach(field => field.addEventListener('input', () => { settingsStatus.textContent = '有尚未套用的變更'; }));
+algorithmSelect.addEventListener('change', () => { settingsStatus.textContent = '有尚未套用的變更'; });
+document.querySelector('#settings').onsubmit = event => {
+  event.preventDefault();
+  const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
+  values.algorithm = algorithmSelect.value;
+  settingsStatus.textContent = '正在套用…';
+  control('settings', values).then(state => { settingsStatus.textContent = '已套用並重新播放'; render(state); }).catch(error => { settingsStatus.textContent = '套用失敗'; window.alert(error.message); });
+};
 refresh(); setInterval(refresh, 350);

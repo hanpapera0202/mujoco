@@ -29,6 +29,10 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
         self.assertLess(first.spawn_time_s, second.spawn_time_s)
         self.assertGreater(abs(first.spawn_xyz[1] - second.spawn_xyz[1]), 1.00)
 
+    def test_feed_interval_controls_every_scheduled_release(self):
+        release_times = [item.spawn_time_s for item in self.demo.items]
+        np.testing.assert_allclose(np.diff(release_times), self.demo.parameters.feed_interval_s)
+
     def test_robot_bases_are_closer_to_narrow_line(self):
         first = self.demo.model.body_pos[self.demo.model.body("robot_A_base").id]
         second = self.demo.model.body_pos[self.demo.model.body("robot_B_base").id]

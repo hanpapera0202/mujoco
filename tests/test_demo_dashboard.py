@@ -15,6 +15,7 @@ class FakeDemo:
     def __init__(self):
         self.viewer_requests = 0
         self.paused = True
+        self.settings_values = None
 
     def request_viewer_open(self):
         self.viewer_requests += 1
@@ -22,6 +23,9 @@ class FakeDemo:
 
     def set_paused(self, paused):
         self.paused = paused
+
+    def update_settings(self, values):
+        self.settings_values = values
 
     def snapshot(self):
         return {"viewer": {"active": False, "launching": False, "requested": self.viewer_requests > 0}}
@@ -66,6 +70,25 @@ class DashboardViewerControlTests(unittest.TestCase):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="open-mujoco"', html)
         self.assertIn("開啟 / 顯示 MuJoCo", html)
+
+    def test_visible_demo_settings_action_reaches_the_simulator(self):
+        html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="apply-demo-settings"', html)
+        demo = FakeDemo()
+        dashboard = start_dashboard(demo, port=0)
+        try:
+            values = {"feed_interval_s": 2.0, "belt_speed_mps": 0.12}
+            request = Request(
+                f"{dashboard.url}/api/control",
+                data=json.dumps({"action": "settings", "values": values}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=2):
+                pass
+            self.assertEqual(demo.settings_values, values)
+        finally:
+            dashboard.stop()
 
 
 if __name__ == "__main__":

@@ -211,7 +211,7 @@ def make_demo_items(seed: int, feed_interval_s: float) -> list[DemoItem]:
         center_x = 0.0
         # Physical feed is paced below the measured service rate. Concurrent
         # MIDDLE allocation remains covered independently by coordinator tests.
-        spawn_time_s = 0.2 if index == 1 else 10.0 + (index - 2) * feed_interval_s
+        spawn_time_s = 0.2 + (index - 1) * feed_interval_s
         spawn_y = 2.30 if index == 2 else 1.20
         spawn_z = 0.16 if index == 8 else 0.13
         items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), spawn_y, spawn_z), 30.0))
