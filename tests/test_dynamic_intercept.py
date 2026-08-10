@@ -50,6 +50,34 @@ class DynamicInterceptTests(unittest.TestCase):
         demo._release_unstarted_assignment(assignment)
         self.assertEqual(demo.coordinator.assignment_counts[ArmId.A], 0)
 
+    def test_deferred_peer_reaches_safe_standby_without_marking_missed(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        item = demo.items[1]
+        place_part(demo.data, demo.qpos_addresses[item.part_name], item.spawn_xyz)
+        demo.spawned.add(item.part_name)
+        mujoco.mj_forward(demo.model, demo.data)
+        assignment = Candidate(
+            ArmId.B,
+            item.part_name,
+            ObjectClass.MIDDLE,
+            "shared_middle",
+            "right_bin",
+            (0.0, 10.0),
+            1.0,
+        )
+        with redirect_stdout(StringIO()):
+            self.assertTrue(demo._start_handoff_preparation(assignment))
+            while demo.data.time < 5.8:
+                demo._update_belt()
+                demo._update_missions()
+                mujoco.mj_forward(demo.model, demo.data)
+                mujoco.mj_step(demo.model, demo.data)
+        mission = demo.missions[ArmId.B]
+        self.assertTrue(mission.preparation_only)
+        self.assertTrue(mission.preparation_complete)
+        self.assertEqual(demo.missed, set())
+        self.assertEqual(mission.keyframes[mission.keyframe_index][0], "handoff_ready")
+
 
 if __name__ == "__main__":
     unittest.main()

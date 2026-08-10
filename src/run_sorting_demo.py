@@ -122,6 +122,12 @@ class ArmMission:
     joint_strategy: tuple[str, str] | None = None
     last_pick_xyz: np.ndarray | None = None
     tracking_updates: int = 0
+    preparation_only: bool = False
+    handoff_assignment: object | None = None
+    handoff_lead_assignment: object | None = None
+    lead_started: bool = False
+    handoff_target_qpos: np.ndarray | None = None
+    preparation_complete: bool = False
 
     @property
     def done(self) -> bool:
@@ -331,6 +337,7 @@ class SortingDemo:
         )
         self.missions: dict[ArmId, ArmMission] = {}
         self.deferred_assignments = {}
+        self.handoff_leads = {}
         self.spawned: set[str] = set()
         self.placed: set[str] = set()
         self.missed: set[str] = set()
@@ -443,6 +450,7 @@ class SortingDemo:
                     "placement_zone": mission.placement_zone,
                     "route": mission.route_variant,
                     "tracking_updates": mission.tracking_updates,
+                    "preparation_only": mission.preparation_only,
                 }
                 for arm, mission in self.missions.items()
                 if not mission.done
@@ -545,7 +553,7 @@ class SortingDemo:
                     overlaps.append((self._geom_description(first_id), self._geom_description(second_id)))
         return overlaps
 
-    def _preflight_mission(self, mission: ArmMission) -> tuple[bool, str]:
+    def _preflight_mission(self, mission: ArmMission, enforce_warning: bool = True) -> tuple[bool, str]:
         """Check both arms on one time axis before admitting a mission."""
         kin = self.kinematics[mission.arm]
         trial = mujoco.MjData(self.model)
@@ -567,7 +575,7 @@ class SortingDemo:
             contacts = self._forbidden_contacts(trial)
             if contacts:
                 return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
-            if any(other_arm is not mission.arm for other_arm in self.missions):
+            if enforce_warning and any(other_arm is not mission.arm for other_arm in self.missions):
                 envelope_overlaps = self._warning_envelope_overlaps(trial)
                 if envelope_overlaps:
                     return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
@@ -865,6 +873,19 @@ class SortingDemo:
             return
         self.last_schedule_s = self.data.time
         self._start_safe_deferred_assignments()
+        self._activate_prepared_handoffs()
+        if any(
+            mission.preparation_only
+            and mission.handoff_lead_assignment is not None
+            and not mission.lead_started
+            for mission in self.missions.values()
+        ):
+            self.latest_decision = {
+                "assignments": [],
+                "rejected": {},
+                "status": "preparing_handoff_lead",
+            }
+            return
         # A committed moving part must not be starved by repeatedly assigning
         # newer arrivals to the peer arm. Retry the reservation until it starts
         # or exits before creating another commitment.
@@ -944,8 +965,10 @@ class SortingDemo:
             # All nine joint actions are unsafe. Admit one screened mission so
             # the line still makes progress and defer its equal peer.
             first, second = assignments
-            self._start_assignment(first)
             self.deferred_assignments[second.arm] = second
+            # Bootstrap through the peer's safe standby pose. The lead arm
+            # stays at its measured pose until the shared corridor is clear.
+            self.handoff_leads[second.arm] = first
             self._log("joint_defer", evaluated=len(evidence), reason="all_joint_routes_unsafe")
             return
 
@@ -987,6 +1010,14 @@ class SortingDemo:
 
     def _start_safe_deferred_assignments(self) -> None:
         for arm, assignment in list(self.deferred_assignments.items()):
+            if any(
+                mission.preparation_only
+                and mission.handoff_lead_assignment is not None
+                and mission.handoff_lead_assignment.object_id == assignment.object_id
+                and not mission.lead_started
+                for mission in self.missions.values()
+            ):
+                continue
             part_y = float(self.data.qpos[self.qpos_addresses[assignment.object_id] + 1])
             if part_y < TAIL_EXIT_Y_M:
                 self.deferred_assignments.pop(arm)
@@ -994,13 +1025,166 @@ class SortingDemo:
                 self.coordinator.mark_completed(assignment.object_id)
                 self._log("missed", object_id=assignment.object_id, reason="tail_exit_while_deferred")
                 continue
-            if arm not in self.missions and self._may_enter_assignment(assignment):
+            if arm not in self.missions and arm in self.handoff_leads:
+                if self._start_handoff_preparation(assignment):
+                    self.deferred_assignments.pop(arm)
+            elif arm not in self.missions and any(other_arm is not arm for other_arm in self.missions):
+                if self._start_handoff_preparation(assignment):
+                    self.deferred_assignments.pop(arm)
+            elif arm not in self.missions and self._may_enter_assignment(assignment):
                 self.deferred_assignments.pop(arm)
                 self._start_assignment(assignment)
 
-    def _start_assignment(self, assignment) -> None:
+    def _activate_prepared_handoffs(self) -> None:
+        """Convert a safe standby motion into a full mission after the peer clears."""
+        for arm, mission in list(self.missions.items()):
+            if not mission.preparation_only or not mission.preparation_complete:
+                continue
+            if mission.handoff_lead_assignment is not None and not mission.lead_started:
+                if self._start_assignment(mission.handoff_lead_assignment):
+                    mission.lead_started = True
+                    self._start_handoff_creep(mission)
+                    self._log("handoff_lead_start", object_id=mission.handoff_lead_assignment.object_id, arm=arm.value)
+                else:
+                    continue
+        if len(self.missions) < 2:
+            for arm, mission in list(self.missions.items()):
+                if not mission.preparation_only or mission.handoff_assignment is None or not mission.preparation_complete:
+                    continue
+                if mission.handoff_lead_assignment is not None and not mission.lead_started:
+                    continue
+                assignment = mission.handoff_assignment
+                self.missions.pop(arm)
+                self._log("handoff_ready", object_id=assignment.object_id, arm=arm.value)
+                self._start_assignment(assignment)
+
+    def _start_handoff_preparation(self, assignment) -> bool:
+        """Move a deferred peer to the closest safe handoff pose."""
+        blockers = [mission for mission in self.missions.values() if mission.arm is not assignment.arm]
+        if blockers:
+            blocker = blockers[0]
+        else:
+            # Bootstrap mode: screen against the other arm's current static
+            # posture before admitting the lead assignment.
+            other_arm = ArmId.B if assignment.arm is ArmId.A else ArmId.A
+            other_kin = self.kinematics[other_arm]
+            qpos = self.data.qpos[other_kin.qpos_addresses].copy()
+            blocker = ArmMission(
+                other_arm,
+                "__static_peer__",
+                "",
+                [("static", 999.0, qpos, GRIP_OPEN_M)],
+                self.data.time,
+                trajectory=[(self.data.time, qpos.copy(), GRIP_OPEN_M)],
+                stage_start_qpos=qpos.copy(),
+            )
+        base = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
+        kin = self.kinematics[assignment.arm]
+        escape_qpos = {
+            ArmId.A: np.array((-2.1728, -0.2902, -1.8000, 2.5770, 4.0202, -6.1516)),
+            ArmId.B: np.array((3.3961, 1.7425, -1.3483, 0.0000, 1.9187, 0.0000)),
+        }[assignment.arm]
+        rng = np.random.default_rng(self.seed + int(self.data.time * 1000.0) + (1 if assignment.arm is ArmId.A else 2))
+        ranges = np.array([self.model.jnt_range[joint_id] for joint_id in kin.joint_ids])
+        candidates = [escape_qpos]
+        candidates.extend(rng.uniform(ranges[:, 0] + 0.05, ranges[:, 1] - 0.05) for _ in range(96))
+
+        safe_qpos = None
+        for qpos in candidates:
+            probe = copy.deepcopy(base)
+            probe.preparation_only = True
+            probe.keyframes = [("handoff_escape", 4.0, qpos.copy(), GRIP_OPEN_M)]
+            probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
+            probe.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
+            safe, _ = self._preflight_joint_pair(probe, blocker)
+            if safe:
+                safe_qpos = qpos.copy()
+                break
+        if safe_qpos is None:
+            self._log("handoff_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="no_safe_standby")
+            return False
+
+        # Find the furthest approach posture that remains safe over the peer's
+        # complete future trajectory. This is the geometric handoff frontier.
+        ready_qpos = safe_qpos.copy()
+        for alpha in np.linspace(0.1, 1.0, 10):
+            qpos = interpolate(safe_qpos, base.keyframes[1][2], float(alpha))
+            probe = copy.deepcopy(base)
+            probe.preparation_only = True
+            readiness = self.bayesian_game.belief_for("outer", "direct").mean
+            approach_duration = 0.8 + 1.6 * (1.0 - readiness)
+            probe.keyframes = [
+                ("handoff_escape", 4.0, safe_qpos.copy(), GRIP_OPEN_M),
+                ("handoff_ready", approach_duration, qpos.copy(), GRIP_OPEN_M),
+            ]
+            probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
+            probe.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
+            safe, _ = self._preflight_joint_pair(probe, blocker)
+            if safe:
+                ready_qpos = qpos.copy()
+            else:
+                break
+        base.preparation_only = True
+        base.handoff_assignment = assignment
+        base.handoff_lead_assignment = self.handoff_leads.pop(assignment.arm, None)
+        base.handoff_target_qpos = base.keyframes[1][2].copy()
+        base.route_variant = "handoff_prepare"
+        readiness = self.bayesian_game.belief_for("outer", "direct").mean
+        approach_duration = 0.8 + 1.6 * (1.0 - readiness)
+        base.keyframes = [
+            ("handoff_escape", 4.0, safe_qpos, GRIP_OPEN_M),
+            ("handoff_ready", approach_duration, ready_qpos, GRIP_OPEN_M),
+        ]
+        base.keyframe_index = 0
+        base.keyframe_started_s = self.data.time
+        base.trajectory = self._build_trajectory(base.arm, base.keyframes)
+        base.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
+        self.missions[assignment.arm] = base
+        self._log("handoff_prepare", object_id=assignment.object_id, arm=assignment.arm.value, readiness=round(readiness, 3))
+        return True
+
+    def _start_handoff_creep(self, standby: ArmMission) -> None:
+        """Try a slow, screened approach while the lead arm performs its pick."""
+        if standby.handoff_target_qpos is None or standby.arm not in self.missions:
+            return
+        kin = self.kinematics[standby.arm]
+        current = self.data.qpos[kin.qpos_addresses].copy()
+        readiness = self.bayesian_game.belief_for("outer", "direct").mean
+        duration = 2.0 + 3.0 * (1.0 - readiness)
+        probe = copy.deepcopy(standby)
+        probe.preparation_complete = False
+        probe.keyframes = [("handoff_creep", duration, standby.handoff_target_qpos.copy(), GRIP_OPEN_M)]
+        probe.keyframe_index = 0
+        probe.keyframe_started_s = self.data.time
+        probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
+        probe.stage_start_qpos = current.copy()
+        lead = self.missions.get(standby.handoff_lead_assignment.arm) if standby.handoff_lead_assignment is not None else None
+        if lead is None:
+            return
+        safe, _ = self._preflight_joint_pair(lead, probe)
+        if not safe:
+            self._log("handoff_creep_hold", object_id=standby.object_id, arm=standby.arm.value, reason="peer_path_screen")
+            return
+        standby.keyframes = probe.keyframes
+        standby.keyframe_index = 0
+        standby.keyframe_started_s = self.data.time
+        standby.trajectory = probe.trajectory
+        standby.stage_start_qpos = current.copy()
+        standby.preparation_complete = False
+        self._log("handoff_creep", object_id=standby.object_id, arm=standby.arm.value, duration=round(duration, 2))
+
+    def _start_assignment(self, assignment) -> bool:
         mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
         safe, reason = self._preflight_mission(mission)
+        if not safe and "safety_envelope" in reason:
+            # A prepared peer changes the admissible corridor. Re-evaluate the
+            # same assignment through the Bayesian route candidates instead
+            # of treating the first direct IK path as the only possibility.
+            for candidate in self._route_candidates(mission):
+                candidate_safe, candidate_reason = self._preflight_mission(candidate)
+                if candidate_safe:
+                    mission, safe, reason = candidate, True, "clear_alternate_route"
+                    break
         self.last_preflight = {"status": "clear" if safe else "deferred", "object_id": assignment.object_id, "arm": assignment.arm.value, "reason": reason}
         if not safe:
             if "safety_envelope" in reason:
@@ -1012,10 +1196,11 @@ class SortingDemo:
                 # equal-peer arm with its updated assignment count.
                 self._release_unstarted_assignment(assignment)
                 self._log("screen_reject", object_id=assignment.object_id, arm=assignment.arm.value, reason="fixed_path_collision", contact=reason)
-            return
+            return False
         self.missions[assignment.arm] = mission
         self.arm_outcomes[assignment.arm]["attempts"] += 1
         self._log("assign", object_id=assignment.object_id, arm=assignment.arm.value, placement=assignment.placement_zone)
+        return True
 
     def _release_unstarted_assignment(self, assignment) -> None:
         """Undo accounting for an executor-rejected high-level commitment."""
@@ -1033,6 +1218,14 @@ class SortingDemo:
             if mission.failed and arm is ArmId.B and ArmId.A in self.missions and self.missions[ArmId.A].failed:
                 continue
             kin = self.kinematics[arm]
+            if mission.preparation_only and mission.preparation_complete:
+                # Hold the last safe standby pose.  This is a real executor
+                # state, not a completed pick, so the object remains claimed
+                # until the peer clears and the handoff is activated.
+                target = mission.keyframes[-1][2]
+                kin.command_joint_pose(target, GRIP_OPEN_M)
+                mission.last_safe_qpos = target.copy()
+                continue
             # Safety guards may stretch a stage while the object keeps moving.
             # Recompute the interception from the remaining close time so a
             # delayed arm does not close at a stale conveyor coordinate.
@@ -1096,6 +1289,14 @@ class SortingDemo:
             # Starting the next interpolation from the lagging measured pose
             # would briefly unload the servo and make the wrist dip.
             mission.stage_start_qpos = target.copy()
+            if mission.preparation_only and mission.done:
+                mission.preparation_complete = True
+                mission.keyframe_index = len(mission.keyframes) - 1
+                mission.keyframe_started_s = self.data.time
+                mission.next_replan_s = float("inf")
+                mission.stage_start_qpos = target.copy()
+                self._log("handoff_standby", object_id=mission.object_id, arm=arm.value)
+                continue
             if mission.done:
                 kin.set_pad_adhesion(0.0)
                 self.missions.pop(arm)

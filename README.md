@@ -24,7 +24,9 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.9.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.10.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+
+本版新增中央交接預備：當九組雙臂路徑都被 10 cm 警戒盒否決時，不再讓一臂直接穿過共同區。系統會先以靜態安全姿勢篩選另一臂，讓它經 `handoff_escape` 到 `handoff_ready`，再啟動領先手臂；領先手臂完成後，待命手臂立即轉入原抓取任務。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
