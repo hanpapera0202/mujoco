@@ -79,7 +79,10 @@ class DemoParameters:
     simulation_speed: float = 1.0
     warning_margin_m: float = 0.10
     feed_batch_size: float = 2.0
-    feed_lateral_spread_m: float = 0.15
+    feed_x_min_m: float = -0.15
+    feed_x_max_m: float = 0.15
+    feed_y_min_m: float = 1.15
+    feed_y_max_m: float = 1.25
 
 
 CSPR_ALGORITHM_ID = "bc_jsp"
@@ -215,7 +218,8 @@ def make_demo_items(
     seed: int,
     feed_interval_s: float,
     feed_batch_size: int = 2,
-    feed_lateral_spread_m: float = 0.15,
+    feed_x_range_m: tuple[float, float] = (-0.15, 0.15),
+    feed_y_range_m: tuple[float, float] = (1.15, 1.25),
 ) -> list[DemoItem]:
     """Ten deterministic moving parts controlled as shared work."""
     rng = random.Random(seed)
@@ -224,23 +228,24 @@ def make_demo_items(
     for index, object_class in enumerate(classes, start=1):
         # All parts enter the shared central lane.  The coordinator chooses an
         # arm from predicted cost, deadline and balanced assignment history.
-        spread = max(0.05, min(0.18, feed_lateral_spread_m))
+        x_min, x_max = feed_x_range_m
+        y_min, y_max = feed_y_range_m
+        middle_x = 0.5 * (x_min + x_max)
         batch_size = max(1, int(feed_batch_size))
         slot = (index - 1) % batch_size
         if batch_size == 1:
-            side = 1.0 if rng.random() >= 0.5 else -1.0
-            center_x = side * rng.uniform(0.04, spread)
+            center_x = rng.uniform(x_min, x_max)
         elif slot % 2 == 0:
-            center_x = rng.uniform(-spread, -0.04)
+            center_x = rng.uniform(x_min, middle_x - 0.02)
         else:
-            center_x = rng.uniform(0.04, spread)
+            center_x = rng.uniform(middle_x + 0.02, x_max)
         # Physical feed is paced below the measured service rate. Concurrent
         # MIDDLE allocation remains covered independently by coordinator tests.
         spawn_time_s = 0.2 + ((index - 1) // batch_size) * feed_interval_s
         # Every part is created on the physical head segment. With short GUI
         # feed intervals this lets the rolling horizon observe two moving
         # objects together instead of parking part 02 outside both workspaces.
-        spawn_y = 1.20
+        spawn_y = rng.uniform(y_min, y_max)
         spawn_z = 0.16 if index == 8 else 0.13
         items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x, spawn_y, spawn_z), 30.0))
     return items
@@ -289,7 +294,8 @@ class SortingDemo:
             self.seed,
             self.parameters.feed_interval_s,
             int(self.parameters.feed_batch_size),
-            self.parameters.feed_lateral_spread_m,
+            (self.parameters.feed_x_min_m, self.parameters.feed_x_max_m),
+            (self.parameters.feed_y_min_m, self.parameters.feed_y_max_m),
         )
         self.by_name = {item.part_name: item for item in self.items}
         self.qpos_addresses = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
@@ -398,18 +404,25 @@ class SortingDemo:
                 self.algorithm_id = CSPR_ALGORITHM_ID
             if "seed" in values:
                 self.seed = int(values["seed"])
-            for field_name in asdict(self.parameters):
+            candidate_parameters = asdict(self.parameters)
+            for field_name in candidate_parameters:
                 if field_name in values:
                     value = float(values[field_name])
-                    if value <= 0.0:
+                    if field_name not in ("feed_x_min_m", "feed_x_max_m") and value <= 0.0:
                         raise ValueError(f"{field_name} must be positive")
                     if field_name == "warning_margin_m" and not 0.02 <= value <= 0.30:
                         raise ValueError("warning_margin_m must be between 0.02 and 0.30")
                     if field_name == "feed_batch_size" and (value > 10 or not value.is_integer()):
                         raise ValueError("feed_batch_size must be an integer between 1 and 10")
-                    if field_name == "feed_lateral_spread_m" and not 0.05 <= value <= 0.18:
-                        raise ValueError("feed_lateral_spread_m must be between 0.05 and 0.18")
-                    setattr(self.parameters, field_name, value)
+                    candidate_parameters[field_name] = value
+            if not -0.18 <= candidate_parameters["feed_x_min_m"] < candidate_parameters["feed_x_max_m"] <= 0.18:
+                raise ValueError("feed X range must stay within -0.18..0.18 m")
+            if candidate_parameters["feed_x_max_m"] - candidate_parameters["feed_x_min_m"] < 0.08:
+                raise ValueError("feed X range must be at least 0.08 m wide")
+            if not 0.90 <= candidate_parameters["feed_y_min_m"] < candidate_parameters["feed_y_max_m"] <= 1.40:
+                raise ValueError("feed Y range must stay within 0.90..1.40 m")
+            for field_name, value in candidate_parameters.items():
+                setattr(self.parameters, field_name, value)
         self.request_reset()
 
     def reset_if_requested(self) -> bool:

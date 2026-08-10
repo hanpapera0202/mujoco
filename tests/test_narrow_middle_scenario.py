@@ -27,7 +27,7 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
         self.assertTrue(all(item.object_class is ObjectClass.MIDDLE for item in self.demo.items))
         first, second = self.demo.items[:2]
         self.assertEqual(first.spawn_time_s, second.spawn_time_s)
-        self.assertAlmostEqual(first.spawn_xyz[1], second.spawn_xyz[1])
+        self.assertNotEqual(first.spawn_xyz, second.spawn_xyz)
 
     def test_feed_interval_controls_every_scheduled_release(self):
         release_times = [item.spawn_time_s for item in self.demo.items]
@@ -42,16 +42,28 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
 
     def test_seeded_feed_uses_both_sides_of_the_middle_lane(self):
         lateral = [item.spawn_xyz[0] for item in self.demo.items]
-        self.assertLess(lateral[0], -0.04)
-        self.assertGreater(lateral[1], 0.04)
-        self.assertTrue(all(0.04 <= abs(value) <= self.demo.parameters.feed_lateral_spread_m for value in lateral))
+        longitudinal = [item.spawn_xyz[1] for item in self.demo.items]
+        middle = 0.5 * (self.demo.parameters.feed_x_min_m + self.demo.parameters.feed_x_max_m)
+        self.assertLess(lateral[0], middle)
+        self.assertGreater(lateral[1], middle)
+        self.assertTrue(all(self.demo.parameters.feed_x_min_m <= value <= self.demo.parameters.feed_x_max_m for value in lateral))
+        self.assertTrue(all(self.demo.parameters.feed_y_min_m <= value <= self.demo.parameters.feed_y_max_m for value in longitudinal))
         replay = make_demo_items(
             self.demo.seed,
             self.demo.parameters.feed_interval_s,
             int(self.demo.parameters.feed_batch_size),
-            self.demo.parameters.feed_lateral_spread_m,
+            (self.demo.parameters.feed_x_min_m, self.demo.parameters.feed_x_max_m),
+            (self.demo.parameters.feed_y_min_m, self.demo.parameters.feed_y_max_m),
         )
         np.testing.assert_allclose([item.spawn_xyz for item in replay], [item.spawn_xyz for item in self.demo.items])
+
+    def test_invalid_feed_rectangle_is_rejected_transactionally(self):
+        model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
+        demo = SortingDemo(model_path, seed=42)
+        original = (demo.parameters.feed_x_min_m, demo.parameters.feed_x_max_m)
+        with self.assertRaises(ValueError):
+            demo.update_settings({"feed_x_min_m": 0.14, "feed_x_max_m": 0.15})
+        self.assertEqual((demo.parameters.feed_x_min_m, demo.parameters.feed_x_max_m), original)
 
     def test_robot_bases_are_closer_to_narrow_line(self):
         first = self.demo.model.body_pos[self.demo.model.body("robot_A_base").id]
