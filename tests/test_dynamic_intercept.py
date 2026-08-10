@@ -41,6 +41,7 @@ class DynamicInterceptTests(unittest.TestCase):
                 mujoco.mj_step(demo.model, demo.data)
         grasps = [event for event in demo.event_log if event["event"] == "grasp"]
         self.assertEqual([(event["arm"], event["finger_count"]) for event in grasps], [("A", 2)])
+        self.assertGreater(demo.missions[ArmId.A].tracking_updates, 20)
 
     def test_executor_rejection_rolls_back_assignment_fairness(self):
         demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)

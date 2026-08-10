@@ -45,6 +45,8 @@ import mujoco.viewer
 
 CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.25
+TRACKING_IK_PERIOD_S = 0.04
+TRACKING_LEAD_S = 0.10
 MIN_PICK_HEIGHT_M = 0.135
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
@@ -77,6 +79,7 @@ class DemoParameters:
     simulation_speed: float = 1.0
     warning_margin_m: float = 0.10
     feed_batch_size: float = 2.0
+    feed_lateral_spread_m: float = 0.15
 
 
 CSPR_ALGORITHM_ID = "bc_jsp"
@@ -115,6 +118,7 @@ class ArmMission:
     route_variant: str = "direct"
     joint_strategy: tuple[str, str] | None = None
     last_pick_xyz: np.ndarray | None = None
+    tracking_updates: int = 0
 
     @property
     def done(self) -> bool:
@@ -158,11 +162,11 @@ class ArmKinematics:
     def grasp_position(self) -> np.ndarray:
         return self.data.site_xpos[self.grasp_site_id].copy()
 
-    def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray) -> np.ndarray:
+    def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
         """Damped 6D IK with a fixed, conveyor-facing parallel-gripper pose."""
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
-        for _ in range(360):
+        for _ in range(max_iterations):
             mujoco.mj_forward(self.model, self.data)
             current_xmat = self.data.site_xmat[self.grasp_site_id].reshape(3, 3)
             position_error = target_xyz - self.grasp_position()
@@ -207,7 +211,12 @@ def place_part(data: mujoco.MjData, qpos_address: int, xyz: tuple[float, float, 
     data.qvel[qpos_address : qpos_address + 6] = 0.0
 
 
-def make_demo_items(seed: int, feed_interval_s: float, feed_batch_size: int = 2) -> list[DemoItem]:
+def make_demo_items(
+    seed: int,
+    feed_interval_s: float,
+    feed_batch_size: int = 2,
+    feed_lateral_spread_m: float = 0.15,
+) -> list[DemoItem]:
     """Ten deterministic moving parts controlled as shared work."""
     rng = random.Random(seed)
     classes = (ObjectClass.MIDDLE,) * 10
@@ -215,17 +224,25 @@ def make_demo_items(seed: int, feed_interval_s: float, feed_batch_size: int = 2)
     for index, object_class in enumerate(classes, start=1):
         # All parts enter the shared central lane.  The coordinator chooses an
         # arm from predicted cost, deadline and balanced assignment history.
-        center_x = 0.0
+        spread = max(0.05, min(0.18, feed_lateral_spread_m))
+        batch_size = max(1, int(feed_batch_size))
+        slot = (index - 1) % batch_size
+        if batch_size == 1:
+            side = 1.0 if rng.random() >= 0.5 else -1.0
+            center_x = side * rng.uniform(0.04, spread)
+        elif slot % 2 == 0:
+            center_x = rng.uniform(-spread, -0.04)
+        else:
+            center_x = rng.uniform(0.04, spread)
         # Physical feed is paced below the measured service rate. Concurrent
         # MIDDLE allocation remains covered independently by coordinator tests.
-        batch_size = max(1, int(feed_batch_size))
         spawn_time_s = 0.2 + ((index - 1) // batch_size) * feed_interval_s
         # Every part is created on the physical head segment. With short GUI
         # feed intervals this lets the rolling horizon observe two moving
         # objects together instead of parking part 02 outside both workspaces.
         spawn_y = 1.20
         spawn_z = 0.16 if index == 8 else 0.13
-        items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x + rng.uniform(-0.018, 0.018), spawn_y, spawn_z), 30.0))
+        items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x, spawn_y, spawn_z), 30.0))
     return items
 
 
@@ -268,7 +285,12 @@ class SortingDemo:
     def _reset_state(self) -> None:
         """Restore the exact seed scenario without replacing the viewer's MjData."""
         mujoco.mj_resetData(self.model, self.data)
-        self.items = make_demo_items(self.seed, self.parameters.feed_interval_s, int(self.parameters.feed_batch_size))
+        self.items = make_demo_items(
+            self.seed,
+            self.parameters.feed_interval_s,
+            int(self.parameters.feed_batch_size),
+            self.parameters.feed_lateral_spread_m,
+        )
         self.by_name = {item.part_name: item for item in self.items}
         self.qpos_addresses = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
         self.part_dof_addresses = {name: joint_dof_address(self.model, name) for name in PART_NAMES}
@@ -385,6 +407,8 @@ class SortingDemo:
                         raise ValueError("warning_margin_m must be between 0.02 and 0.30")
                     if field_name == "feed_batch_size" and (value > 10 or not value.is_integer()):
                         raise ValueError("feed_batch_size must be an integer between 1 and 10")
+                    if field_name == "feed_lateral_spread_m" and not 0.05 <= value <= 0.18:
+                        raise ValueError("feed_lateral_spread_m must be between 0.05 and 0.18")
                     setattr(self.parameters, field_name, value)
         self.request_reset()
 
@@ -405,6 +429,7 @@ class SortingDemo:
                     "stage": mission.keyframes[mission.keyframe_index][0],
                     "placement_zone": mission.placement_zone,
                     "route": mission.route_variant,
+                    "tracking_updates": mission.tracking_updates,
                 }
                 for arm, mission in self.missions.items()
                 if not mission.done
@@ -780,36 +805,47 @@ class SortingDemo:
 
     def _refresh_intercept(self, mission: ArmMission) -> None:
         close_index = next((index for index, frame in enumerate(mission.keyframes) if frame[0] == "close"), -1)
-        if mission.failed or self.data.time < mission.next_replan_s or close_index < 0 or mission.keyframe_index >= close_index:
+        if mission.failed or self.data.time < mission.next_replan_s or close_index < 0 or mission.keyframe_index > close_index:
             return
         kin = self.kinematics[mission.arm]
-        stage_elapsed = self.data.time - mission.keyframe_started_s
-        stage_remaining = max(0.0, mission.keyframes[mission.keyframe_index][1] - stage_elapsed)
-        time_to_close_s = stage_remaining + sum(frame[1] for frame in mission.keyframes[mission.keyframe_index + 1 : close_index + 1])
-        mission.intercept_close_s = self.data.time + time_to_close_s
-        pick_xyz = self._grasp_target(mission.arm, self._predict_part_position(mission.object_id, time_to_close_s))
+        current_stage = mission.keyframes[mission.keyframe_index][0]
+        if current_stage not in ("prepare", "track", "descend", "close"):
+            return
+
+        # Follow the observed conveyor body instead of repeatedly aiming at one
+        # old intercept. A small lead compensates actuator and IK latency.
+        pick_xyz = self._grasp_target(
+            mission.arm,
+            self._predict_part_position(mission.object_id, TRACKING_LEAD_S),
+        )
         pick_xyz[2] = max(MIN_PICK_HEIGHT_M, pick_xyz[2])
-        if mission.last_pick_xyz is not None and np.linalg.norm(pick_xyz - mission.last_pick_xyz) < 0.015:
-            mission.next_replan_s = self.data.time + 0.25
+        if mission.last_pick_xyz is not None and np.linalg.norm(pick_xyz - mission.last_pick_xyz) < 0.003:
+            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             return
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
         start = self.data.qpos[kin.qpos_addresses].copy()
-        q_pregrasp = kin.solve_position_ik(pregrasp, start)
-        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp)
+        q_pregrasp = kin.solve_position_ik(pregrasp, start, max_iterations=24)
+        q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp, max_iterations=24)
         if not self._pose_is_safe(mission.arm, q_pregrasp) or not self._pose_is_safe(mission.arm, q_pick):
-            mission.next_replan_s = self.data.time + 0.12
+            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             return
         for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
-            if stage == "track":
+            if stage == "prepare" and index == mission.keyframe_index:
+                prepare_xyz = pick_xyz.copy()
+                prepare_xyz[2] = 0.56
+                q_prepare = kin.solve_position_ik(prepare_xyz, start, max_iterations=24)
+                mission.keyframes[index] = (stage, duration, q_prepare, opening)
+            elif stage == "track":
                 mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
             elif stage in ("descend", "close"):
                 mission.keyframes[index] = (stage, duration, q_pick, opening)
             elif stage == "lift":
                 mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
-        mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes)
+        mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes[mission.keyframe_index :])
         mission.last_pick_xyz = pick_xyz.copy()
-        mission.next_replan_s = self.data.time + 0.25
+        mission.tracking_updates += 1
+        mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
 
     def _schedule(self) -> None:
         if self.data.time - self.last_schedule_s < SCHEDULER_PERIOD_S:
@@ -1031,7 +1067,10 @@ class SortingDemo:
             mission.last_safe_qpos = current.copy()
             joint_error = float(np.max(np.abs(target - current)))
             joint_speed = float(np.max(np.abs(self.data.qvel[kin.dof_addresses])))
-            stage_reached = elapsed >= duration and joint_error <= 0.08 and joint_speed <= 0.12
+            conveyor_tracking_stage = stage in ("prepare", "track", "descend", "close")
+            stage_reached = elapsed >= duration and joint_error <= 0.08 and (
+                conveyor_tracking_stage or joint_speed <= 0.12
+            )
             if stage == "close" and stage_reached and not mission.grasped:
                 if not self._confirm_grasp(arm, mission):
                     continue

@@ -31,7 +31,7 @@ function render(state) {
   armRows.unshift(`<strong>產線負載</strong><span>線上 ${feedback.active_parts ?? 0} 件</span><span>中央週期估計 ${(feedback.cycle_estimate_s ?? 0).toFixed(2)} s</span>`);
   setRows(document.querySelector('#feedback'), armRows, '尚無執行回饋。');
   if (!initialized) { fields.forEach(field => field.value = field.name === 'seed' ? state.seed : state.parameters[field.name]); algorithmSelect.value = state.algorithm.id; initialized = true; }
-  const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)} · ${task.route || 'direct'}</span>`);
+  const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)} · ${task.route || 'direct'} · IK更新 ${task.tracking_updates ?? 0}</span>`);
   setRows(document.querySelector('#missions'), missions, '兩台手臂皆可接收任務。');
   document.querySelector('#deferred').textContent = state.deferred.length ? `安全等待：${state.deferred.join('、')} 正等待中央走廊淨空。` : '';
   const check = state.preflight || {};

@@ -26,6 +26,8 @@
 | DYN-02 | PASS | 安全減速後按剩餘閉爪時間更新動態攔截點；A 與 B 均須能對移動 MIDDLE 物件形成雙指接觸 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
 | FEED-02 | PASS | GUI 可設定每批投料物品數，預設同時投放 2 件，投料間隔套用於批次之間 | `test_narrow_middle_scenario.py` |
 | PREP-01 | PASS | 抓取任務先執行提前準備與跟帶靠近，再下降閉爪，不得只在最終位置突然啟動 | `test_dynamic_intercept.py`、任務階段快照 |
+| FEED-03 | PASS | 投料位置使用固定 seed 可重現的橫向隨機數；預設批次左右分散，不固定在中線 | `test_narrow_middle_scenario.py` |
+| TRACK-01 | PASS | 物體狀態 500 Hz 讀取、熱啟動 IK 25 Hz；閉爪期間仍跟隨皮帶，移動階段不得要求關節速度歸零 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
 
 ## 新需求加入方式
 

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from central_coordinator import ArmId, ObjectClass
-from run_sorting_demo import SortingDemo
+from run_sorting_demo import SortingDemo, make_demo_items
 
 
 class NarrowMiddleScenarioTests(unittest.TestCase):
@@ -39,6 +39,19 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
         self.assertEqual(release_times[0], release_times[1])
         self.assertEqual(release_times[2], release_times[3])
         self.assertEqual(int(self.demo.parameters.feed_batch_size), 2)
+
+    def test_seeded_feed_uses_both_sides_of_the_middle_lane(self):
+        lateral = [item.spawn_xyz[0] for item in self.demo.items]
+        self.assertLess(lateral[0], -0.04)
+        self.assertGreater(lateral[1], 0.04)
+        self.assertTrue(all(0.04 <= abs(value) <= self.demo.parameters.feed_lateral_spread_m for value in lateral))
+        replay = make_demo_items(
+            self.demo.seed,
+            self.demo.parameters.feed_interval_s,
+            int(self.demo.parameters.feed_batch_size),
+            self.demo.parameters.feed_lateral_spread_m,
+        )
+        np.testing.assert_allclose([item.spawn_xyz for item in replay], [item.spawn_xyz for item in self.demo.items])
 
     def test_robot_bases_are_closer_to_narrow_line(self):
         first = self.demo.model.body_pos[self.demo.model.body("robot_A_base").id]
