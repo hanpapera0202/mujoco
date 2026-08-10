@@ -12,4 +12,4 @@
 
 其中 `<scope>` 可為 `sim`、`planner`、`grasp`、`model`、`dashboard`、`docs` 或 `build`。發布版本時必須建立並推送同名 Git tag，例如 `v0.2.0`。
 
-目前版本 `0.3.2` 加入專案需求記憶、固定 seed 物理抓取回歸門檻與 GitHub Actions；`PLACE-01` 的真實動力運送仍列為尚未完成，不納入成功數據。
+目前版本 `0.4.0` 加入致動器驅動的雙臂實體抓放、零 weld 模型、中文控制台的 MuJoCo 重開功能，以及固定 seed 首對完整放置回歸。`PLACE-01` 的 10 件 100% 目標仍列為尚未完成。

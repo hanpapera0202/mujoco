@@ -58,10 +58,15 @@ def start_dashboard(demo: SortingDemo, host: str = "127.0.0.1", port: int = 8765
                 action = payload.get("action")
                 if action == "restart":
                     demo.request_reset()
+                elif action == "start":
+                    demo.set_paused(False)
+                    demo.request_viewer_open()
                 elif action == "pause":
                     demo.set_paused(True)
                 elif action == "resume":
                     demo.set_paused(False)
+                elif action == "open_mujoco":
+                    demo.request_viewer_open()
                 elif action == "settings":
                     demo.update_settings(payload.get("values", {}))
                 else:
@@ -84,4 +89,5 @@ def start_dashboard(demo: SortingDemo, host: str = "127.0.0.1", port: int = 8765
     server = ThreadingHTTPServer((host, port), Handler)
     thread = threading.Thread(target=server.serve_forever, name="nova5-demo-dashboard", daemon=True)
     thread.start()
-    return Dashboard(server, thread, f"http://{host}:{port}")
+    actual_port = server.server_address[1]
+    return Dashboard(server, thread, f"http://{host}:{actual_port}")

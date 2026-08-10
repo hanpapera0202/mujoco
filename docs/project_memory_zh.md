@@ -12,7 +12,9 @@
 | GRASP-02 | PASS | 抓取不得啟用 weld/equality constraint，也不得瞬移物件 | `test_sorting_demo_regression.py` |
 | SAFE-01 | PASS | 第一對並行抓取期間不得發生雙臂碰撞或安全停止 | `test_sorting_demo_regression.py` |
 | LOAD-01 | PASS | 投料間隔及最大線上物件數可設定，避免輸入率超過服務率 | 程式參數與控制台 |
+| PLACE-00 | PASS | 固定 seed 42 的首對物件須維持雙指夾持至釋放，並落入左右正確托盤 | `test_sorting_demo_regression.py` |
 | PLACE-01 | OPEN | 物件須靠真實夾持力運送並落入正確托盤，10 件完成率目標 100% | 尚待低階動力控制完成 |
+| GUI-01 | PASS | 中文控制台可開啟或重新開啟對應的 MuJoCo 視窗；開始動作會同時開啟視窗 | `test_demo_dashboard.py` |
 
 ## 新需求加入方式
 
@@ -34,4 +36,3 @@ python -m unittest discover -s tests -v
 ```
 
 看到所有測試都是 `OK` 才能建立版本。GitHub 的 `.github/workflows/regression.yml` 也會在每次 push 和 pull request 自動執行相同檢查；綠色勾表示既有能力沒有被破壞，紅色叉表示要先修復。
-

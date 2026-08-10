@@ -22,6 +22,8 @@ function setRows(element, rows, empty) {
 function render(state) {
   document.querySelector('#connection').textContent = state.paused ? '已暫停' : '運行中';
   document.querySelector('#sim-time').textContent = `${state.time_s.toFixed(3)} s`;
+  const viewer = state.viewer || {};
+  document.querySelector('#viewer-status').textContent = viewer.active ? 'MuJoCo 視窗已開啟；按鈕可將它帶到前景。' : viewer.launching || viewer.requested ? '正在開啟 MuJoCo 視窗…' : 'MuJoCo 視窗已關閉，可隨時重新開啟。';
   ['spawned', 'placed', 'missed'].forEach(key => document.querySelector(`#${key}`).textContent = state.counts[key]);
   const feedback = state.feedback || {};
   const armRows = Object.entries(feedback.arms || {}).map(([arm, value]) => `<strong>手臂 ${arm}</strong><span>週期 ${value.cycle_s.toFixed(2)} s</span><span>抓取 ${value.grasped}/${value.attempts} · 放置 ${value.placed}</span>`);
@@ -43,6 +45,7 @@ function render(state) {
 async function refresh() { try { render(await (await fetch('/api/state')).json()); } catch (_) { document.querySelector('#connection').textContent = '未連線'; } }
 document.querySelector('#restart').onclick = () => control('restart').then(render);
 document.querySelector('#pause').onclick = () => control('pause').then(render);
-document.querySelector('#resume').onclick = () => control('resume').then(render);
+document.querySelector('#resume').onclick = () => control('start').then(render).catch(error => window.alert(error.message));
+document.querySelector('#open-mujoco').onclick = () => control('open_mujoco').then(render).catch(error => window.alert(error.message));
 document.querySelector('#settings').onsubmit = event => { event.preventDefault(); const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)])); values.algorithm = algorithmSelect.value; control('settings', values).then(render).catch(error => window.alert(error.message)); };
 refresh(); setInterval(refresh, 350);

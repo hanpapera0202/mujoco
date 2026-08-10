@@ -24,7 +24,7 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.3.2`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.4.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
 python src\run_sorting_demo.py --seed 42
 
 # 執行可重現的第一版基準範例
@@ -39,7 +39,7 @@ python src\run_benchmark.py --seeds 30 --output-dir results\v1
 
 目前演算法名稱為 **CSPR（Centralized Spatiotemporal Reservation，集中式時空預約）**。執行器會以實測週期回授更新派工估計、限制投料負載，並在相同時間軸上預檢候選與既有手臂的關節路徑。抓取需雙側指墊同時接觸，且不使用 weld；最後仍須通過托盤位置驗證才列為成功。控制台已保留 Deadline-first、Hungarian、Fuzzy 的切換位置，目前只啟用 CSPR。
 
-啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可暫停、繼續、重播、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉瀏覽器頁面不會停止模擬；在模擬仍開啟時，再次進入同一網址或雙擊 `open_dashboard.bat` 即可。MuJoCo 視窗聚焦後按 `R` 也會重播。
+啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可開始、暫停、重播、開啟或重新顯示 MuJoCo、修改 seed、調整皮帶/演示速度、調整中央協調器參數，並查看 A/B 任務、最新派工、拒絕原因與事件紀錄。關閉 MuJoCo 視窗後，控制服務仍會保留同一場演示，按「開始 / 繼續」即可重新開啟。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
 演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。
 

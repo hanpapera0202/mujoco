@@ -12,14 +12,14 @@ from run_sorting_demo import ArmId, SortingDemo
 
 
 class SortingDemoPhysicalRegressionTests(unittest.TestCase):
-    """Protect the seed-42 bilateral grasp demonstrated by v0.3.0."""
+    """Protect the complete seed-42 physical pick-and-place pair."""
 
     @classmethod
     def setUpClass(cls):
         model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
         cls.demo = SortingDemo(model_path, seed=42)
         with redirect_stdout(StringIO()):
-            while cls.demo.data.time < 4.15 and not cls.demo.paused:
+            while cls.demo.data.time < 20.75 and not cls.demo.paused:
                 cls.demo.step()
         cls.events = cls.demo.event_log
 
@@ -38,10 +38,24 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
             self.assertEqual(event["grasp_constraint"], "none")
 
     def test_no_grasp_constraint_or_safety_failure_is_hidden(self):
+        self.assertEqual(self.demo.model.neq, 0)
         self.assertFalse(self.demo.data.eq_active.any())
-        forbidden_events = {"safety_stop", "missed"}
+        forbidden_events = {"safety_stop", "safety_recover", "missed"}
         self.assertFalse(any(event["event"] in forbidden_events for event in self.events))
         self.assertFalse(self.demo.paused)
+
+    def test_first_pair_remains_held_until_physical_release(self):
+        releases = [event for event in self.events if event["event"] == "release"]
+        self.assertEqual({event["object_id"] for event in releases}, {"part_01", "part_02"})
+        for event in releases:
+            self.assertEqual(event["finger_count"], 2)
+            self.assertGreater(event["part_xyz"][2], 0.20)
+
+    def test_first_pair_is_verified_in_its_target_trays(self):
+        placements = [event for event in self.events if event["event"] == "place"]
+        self.assertEqual({event["object_id"] for event in placements}, {"part_01", "part_02"})
+        self.assertEqual(self.demo.placed, {"part_01", "part_02"})
+        self.assertFalse(self.demo.missed)
 
     def test_load_control_parameters_remain_explicit(self):
         self.assertGreaterEqual(self.demo.parameters.feed_interval_s, self.demo.parameters.fixed_cycle_s)
@@ -50,4 +64,3 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

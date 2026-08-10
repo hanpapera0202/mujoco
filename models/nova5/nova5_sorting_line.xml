@@ -108,31 +108,31 @@
 
     <body name="part_01" pos="-0.42 0.83 0.065">
       <freejoint/>
-      <geom type="box" size="0.025 0.025 0.018" material="part_blue" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.025 0.025 0.030" material="part_blue" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_02" pos="-0.15 0.92 0.065">
       <freejoint/>
-      <geom type="box" size="0.023 0.023 0.02" material="part_green" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.023 0.023 0.030" material="part_green" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_03" pos="0.36 0.87 0.065">
       <freejoint/>
-      <geom type="box" size="0.024 0.024 0.017" material="part_yellow" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.024 0.024 0.030" material="part_yellow" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_04" pos="0.12 0.56 0.065">
       <freejoint/>
-      <geom type="box" size="0.024 0.024 0.018" material="part_blue" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.024 0.024 0.030" material="part_blue" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_05" pos="-0.48 0.33 0.065">
       <freejoint/>
-      <geom type="box" size="0.026 0.026 0.017" material="part_green" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.026 0.026 0.030" material="part_green" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_06" pos="0.45 0.29 0.065">
       <freejoint/>
-      <geom type="box" size="0.025 0.025 0.018" material="part_yellow" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.025 0.025 0.030" material="part_yellow" mass="0.035" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_07" pos="-0.60 0.78 0.060">
       <freejoint/>
-      <geom type="cylinder" size="0.026 0.020" material="part_orange" mass="0.030" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="cylinder" size="0.026 0.030" material="part_orange" mass="0.030" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_08" pos="0.58 0.73 0.074">
       <freejoint/>
@@ -140,11 +140,11 @@
     </body>
     <body name="part_09" pos="-0.32 0.49 0.062">
       <freejoint/>
-      <geom type="box" size="0.032 0.020 0.016" material="part_blue" mass="0.032" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.032 0.020 0.030" material="part_blue" mass="0.032" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_10" pos="0.38 0.46 0.060">
       <freejoint/>
-      <geom type="cylinder" size="0.024 0.019" material="part_green" mass="0.029" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
+      <geom type="cylinder" size="0.024 0.030" material="part_green" mass="0.029" contype="32" conaffinity="25" friction="1.2 0.02 0.001"/>
     </body>
     <body name="part_11" pos="-0.05 0.25 0.070">
       <freejoint/>
@@ -194,15 +194,15 @@
                   <geom name="A_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6" contype="2" conaffinity="4"/>
                   <site name="A_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
                   <body name="A_gripper" pos="0 0 -0.09">
-                    <geom name="A_gripper_palm" type="box" size="0.075 0.028 0.014" material="gripper_mat" contype="8" conaffinity="53" mass="0.08"/>
-                    <geom name="A_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="8" conaffinity="53" mass="0.04"/>
+                    <geom name="A_gripper_palm" type="box" pos="0 0.060 0" size="0.075 0.028 0.014" material="gripper_mat" contype="8" conaffinity="53" mass="0.08"/>
+                    <geom name="A_gripper_mount" type="cylinder" pos="0 0.060 0.035" size="0.035 0.018" material="gripper_mat" contype="8" conaffinity="53" mass="0.04"/>
                     <body name="A_left_finger" pos="-0.028 0 -0.055">
                       <joint name="A_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="A_left_finger_pad" type="box" size="0.015 0.075 0.040" material="finger_mat" contype="8" conaffinity="53" mass="0.030" friction="2.5 0.02 0.001"/>
+                      <geom name="A_left_finger_pad" type="box" size="0.015 0.025 0.040" material="finger_mat" contype="8" conaffinity="53" mass="0.030" friction="4.0 0.05 0.001" solref="0.004 1" solimp="0.98 0.995 0.001" adhesion="0"/>
                     </body>
                     <body name="A_right_finger" pos="0.028 0 -0.055">
                       <joint name="A_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="A_right_finger_pad" type="box" size="0.015 0.075 0.040" material="finger_mat" contype="8" conaffinity="53" mass="0.030" friction="2.5 0.02 0.001"/>
+                      <geom name="A_right_finger_pad" type="box" size="0.015 0.025 0.040" material="finger_mat" contype="8" conaffinity="53" mass="0.030" friction="4.0 0.05 0.001" solref="0.004 1" solimp="0.98 0.995 0.001" adhesion="0"/>
                     </body>
                     <site name="A_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
                     <site name="A_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>
@@ -246,15 +246,15 @@
                   <geom name="B_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6" contype="4" conaffinity="2"/>
                   <site name="B_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
                   <body name="B_gripper" pos="0 0 -0.09">
-                    <geom name="B_gripper_palm" type="box" size="0.075 0.028 0.014" material="gripper_mat" contype="16" conaffinity="43" mass="0.08"/>
-                    <geom name="B_gripper_mount" type="cylinder" pos="0 0 0.035" size="0.035 0.018" material="gripper_mat" contype="16" conaffinity="43" mass="0.04"/>
+                    <geom name="B_gripper_palm" type="box" pos="0 0.060 0" size="0.075 0.028 0.014" material="gripper_mat" contype="16" conaffinity="43" mass="0.08"/>
+                    <geom name="B_gripper_mount" type="cylinder" pos="0 0.060 0.035" size="0.035 0.018" material="gripper_mat" contype="16" conaffinity="43" mass="0.04"/>
                     <body name="B_left_finger" pos="-0.028 0 -0.055">
                       <joint name="B_left_finger_slide" type="slide" axis="-1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="B_left_finger_pad" type="box" size="0.015 0.075 0.040" material="finger_mat" contype="16" conaffinity="43" mass="0.030" friction="2.5 0.02 0.001"/>
+                      <geom name="B_left_finger_pad" type="box" size="0.015 0.025 0.040" material="finger_mat" contype="16" conaffinity="43" mass="0.030" friction="4.0 0.05 0.001" solref="0.004 1" solimp="0.98 0.995 0.001" adhesion="0"/>
                     </body>
                     <body name="B_right_finger" pos="0.028 0 -0.055">
                       <joint name="B_right_finger_slide" type="slide" axis="1 0 0" range="0 0.035" limited="true" damping="8"/>
-                      <geom name="B_right_finger_pad" type="box" size="0.015 0.075 0.040" material="finger_mat" contype="16" conaffinity="43" mass="0.030" friction="2.5 0.02 0.001"/>
+                      <geom name="B_right_finger_pad" type="box" size="0.015 0.025 0.040" material="finger_mat" contype="16" conaffinity="43" mass="0.030" friction="4.0 0.05 0.001" solref="0.004 1" solimp="0.98 0.995 0.001" adhesion="0"/>
                     </body>
                     <site name="B_tool0" pos="0 0 -0.115" size="0.012" rgba="0.1 0.9 0.2 1"/>
                     <site name="B_grasp_zone" type="box" pos="0 0 -0.055" size="0.040 0.026 0.042" rgba="0.10 0.92 0.78 0.20"/>
@@ -268,20 +268,20 @@
     </body>
 
     <!-- Visible output trays for the dual-arm sorting demonstration. -->
-    <body name="left_output_tray" pos="-1.10 -0.62 0.055">
-      <geom name="left_tray_floor" type="box" size="0.22 0.18 0.018" material="left_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.18 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0.22 0 0.07" size="0.018 0.18 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0 -0.18 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0 0.18 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
+    <body name="left_output_tray" pos="-1.10 -0.70 0.055">
+      <geom name="left_tray_floor" type="box" size="0.22 0.24 0.018" material="left_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.24 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0.22 0 0.07" size="0.018 0.24 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0 -0.24 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0 0.24 0.07" size="0.22 0.018 0.07" material="left_bin_mat" contype="1" conaffinity="24"/>
       <site name="left_bin_drop" pos="0 0 0.055" size="0.06" rgba="0.1 0.45 1 0.35"/>
     </body>
-    <body name="right_output_tray" pos="1.10 -0.62 0.055">
-      <geom name="right_tray_floor" type="box" size="0.22 0.18 0.018" material="right_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.18 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0.22 0 0.07" size="0.018 0.18 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0 -0.18 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
-      <geom type="box" pos="0 0.18 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
+    <body name="right_output_tray" pos="1.10 -0.70 0.055">
+      <geom name="right_tray_floor" type="box" size="0.22 0.24 0.018" material="right_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="-0.22 0 0.07" size="0.018 0.24 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0.22 0 0.07" size="0.018 0.24 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0 -0.24 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
+      <geom type="box" pos="0 0.24 0.07" size="0.22 0.018 0.07" material="right_bin_mat" contype="1" conaffinity="24"/>
       <site name="right_bin_drop" pos="0 0 0.055" size="0.06" rgba="1 0.45 0.1 0.35"/>
     </body>
   </worldbody>
@@ -298,48 +298,24 @@
     <exclude body1="conveyor_frame" body2="belt_segment_08"/>
   </contact>
 
-  <!-- Activated only after a verified finger-to-part contact. -->
-  <equality>
-    <weld name="A_part_01_grasp" body1="A_gripper" body2="part_01" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_02_grasp" body1="A_gripper" body2="part_02" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_03_grasp" body1="A_gripper" body2="part_03" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_04_grasp" body1="A_gripper" body2="part_04" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_05_grasp" body1="A_gripper" body2="part_05" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_06_grasp" body1="A_gripper" body2="part_06" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_07_grasp" body1="A_gripper" body2="part_07" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_08_grasp" body1="A_gripper" body2="part_08" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_09_grasp" body1="A_gripper" body2="part_09" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="A_part_10_grasp" body1="A_gripper" body2="part_10" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_01_grasp" body1="B_gripper" body2="part_01" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_02_grasp" body1="B_gripper" body2="part_02" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_03_grasp" body1="B_gripper" body2="part_03" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_04_grasp" body1="B_gripper" body2="part_04" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_05_grasp" body1="B_gripper" body2="part_05" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_06_grasp" body1="B_gripper" body2="part_06" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_07_grasp" body1="B_gripper" body2="part_07" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_08_grasp" body1="B_gripper" body2="part_08" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_09_grasp" body1="B_gripper" body2="part_09" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-    <weld name="B_part_10_grasp" body1="B_gripper" body2="part_10" active="false" solref="0.004 1" solimp="0.99 0.999 0.001"/>
-  </equality>
-
   <actuator>
-    <position name="A_joint1_position" joint="A_joint1" kp="120" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
-    <position name="A_joint2_position" joint="A_joint2" kp="160" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-120 120"/>
-    <position name="A_joint3_position" joint="A_joint3" kp="130" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-90 90"/>
-    <position name="A_joint4_position" joint="A_joint4" kp="80" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
-    <position name="A_joint5_position" joint="A_joint5" kp="70" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-40 40"/>
-    <position name="A_joint6_position" joint="A_joint6" kp="45" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-25 25"/>
-    <position name="A_left_finger_position" joint="A_left_finger_slide" kp="500" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-60 60"/>
-    <position name="A_right_finger_position" joint="A_right_finger_slide" kp="500" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-60 60"/>
+    <position name="A_joint1_position" joint="A_joint1" kp="300" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-160 160"/>
+    <position name="A_joint2_position" joint="A_joint2" kp="400" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-240 240"/>
+    <position name="A_joint3_position" joint="A_joint3" kp="350" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-180 180"/>
+    <position name="A_joint4_position" joint="A_joint4" kp="250" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-100 100"/>
+    <position name="A_joint5_position" joint="A_joint5" kp="220" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
+    <position name="A_joint6_position" joint="A_joint6" kp="150" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="A_left_finger_position" joint="A_left_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
+    <position name="A_right_finger_position" joint="A_right_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
 
-    <position name="B_joint1_position" joint="B_joint1" kp="120" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
-    <position name="B_joint2_position" joint="B_joint2" kp="160" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-120 120"/>
-    <position name="B_joint3_position" joint="B_joint3" kp="130" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-90 90"/>
-    <position name="B_joint4_position" joint="B_joint4" kp="80" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
-    <position name="B_joint5_position" joint="B_joint5" kp="70" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-40 40"/>
-    <position name="B_joint6_position" joint="B_joint6" kp="45" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-25 25"/>
-    <position name="B_left_finger_position" joint="B_left_finger_slide" kp="500" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-60 60"/>
-    <position name="B_right_finger_position" joint="B_right_finger_slide" kp="500" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-60 60"/>
+    <position name="B_joint1_position" joint="B_joint1" kp="300" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-160 160"/>
+    <position name="B_joint2_position" joint="B_joint2" kp="400" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-240 240"/>
+    <position name="B_joint3_position" joint="B_joint3" kp="350" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-180 180"/>
+    <position name="B_joint4_position" joint="B_joint4" kp="250" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-100 100"/>
+    <position name="B_joint5_position" joint="B_joint5" kp="220" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
+    <position name="B_joint6_position" joint="B_joint6" kp="150" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="B_left_finger_position" joint="B_left_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
+    <position name="B_right_finger_position" joint="B_right_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
   </actuator>
 
   <sensor>
