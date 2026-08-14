@@ -1086,13 +1086,43 @@ class SortingDemo:
                 "rejected": rejected,
                 "reason": evidence[0].rejection_reason if evidence else "no_candidates",
             }
-            # All nine joint actions are unsafe. Admit one screened mission so
-            # the line still makes progress and defer its equal peer.
+            # A joint route can be unsafe even when each arm's own route is
+            # physically clear.  Do not deadlock both equal peers in that
+            # case: start the first assignment that passes its single-arm
+            # physical preflight, then prepare the peer in parallel.  The
+            # peer will only leave standby after the lead arm's live path is
+            # physically clear, preserving the no-collision guarantee while
+            # allowing the line to make progress.
             first, second = assignments
-            self.deferred_assignments[second.arm] = second
-            # Bootstrap through the peer's safe standby pose. The lead arm
-            # stays at its measured pose until the shared corridor is clear.
-            self.handoff_leads[second.arm] = first
+            lead_assignment = None
+            deferred_assignment = None
+            for candidate_lead, candidate_peer in ((first, second), (second, first)):
+                probe = self._plan_mission(
+                    candidate_lead.arm,
+                    candidate_lead.object_id,
+                    candidate_lead.placement_zone,
+                )
+                safe, _ = self._preflight_mission(probe)
+                if safe:
+                    lead_assignment = candidate_lead
+                    deferred_assignment = candidate_peer
+                    self.missions[candidate_lead.arm] = probe
+                    self.arm_outcomes[candidate_lead.arm]["attempts"] += 1
+                    self._log(
+                        "assign",
+                        object_id=candidate_lead.object_id,
+                        arm=candidate_lead.arm.value,
+                        placement=candidate_lead.placement_zone,
+                        route="single_arm_fallback",
+                    )
+                    break
+            if lead_assignment is None:
+                lead_assignment, deferred_assignment = first, second
+            self.deferred_assignments[deferred_assignment.arm] = deferred_assignment
+            # Bootstrap through the peer's safe standby pose.  It can move
+            # while the lead performs its own pick, but never enters a
+            # physically colliding handoff path.
+            self.handoff_leads[deferred_assignment.arm] = lead_assignment
             self._log("joint_defer", evaluated=len(evidence), reason="all_joint_routes_unsafe")
             return
 
@@ -1197,10 +1227,20 @@ class SortingDemo:
                             contact=contact_reason,
                         )
                     continue
-                if self._start_assignment(mission.handoff_lead_assignment):
+                lead_assignment = mission.handoff_lead_assignment
+                # In the single-arm fallback the lead may already be running
+                # while the peer is preparing.  Replacing that mission here
+                # would create a second executor for the same object and can
+                # make a valid grasp look like a later grip loss.
+                existing_lead = self.missions.get(lead_assignment.arm)
+                if existing_lead is not None and existing_lead.object_id == lead_assignment.object_id:
                     mission.lead_started = True
                     self._start_handoff_creep(mission)
-                    self._log("handoff_lead_start", object_id=mission.handoff_lead_assignment.object_id, arm=arm.value)
+                    self._log("handoff_lead_start", object_id=lead_assignment.object_id, arm=lead_assignment.arm.value)
+                elif self._start_assignment(lead_assignment):
+                    mission.lead_started = True
+                    self._start_handoff_creep(mission)
+                    self._log("handoff_lead_start", object_id=lead_assignment.object_id, arm=lead_assignment.arm.value)
                 else:
                     continue
         if len(self.missions) < 2:
