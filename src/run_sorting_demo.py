@@ -64,7 +64,10 @@ MIN_PICK_HEIGHT_M = 0.16
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.30
-OVERHEAD_APPROACH_XYZ = np.array((0.0, 0.25, 0.75))
+OVERHEAD_APPROACH_XYZ = {
+    ArmId.A: np.array((-0.52, 0.25, 0.75)),
+    ArmId.B: np.array((0.52, 0.25, 0.75)),
+}
 GRASP_XY_TOLERANCE_M = 0.055
 GRASP_PREDICTION_TOLERANCE_M = 0.075
 GRASP_Z_TOLERANCE_M = 0.060
@@ -979,6 +982,11 @@ class SortingDemo:
     def _grasp_target(arm: ArmId, part_xyz: np.ndarray) -> np.ndarray:
         return part_xyz + GRASP_ALIGNMENT_OFFSET_M[arm]
 
+    @staticmethod
+    def _overhead_approach(arm: ArmId) -> np.ndarray:
+        """Keep the physical arm envelope outside the guard before crossing."""
+        return OVERHEAD_APPROACH_XYZ[arm].copy()
+
     def _plan_mission(self, arm: ArmId, object_id: str, placement_zone: str) -> ArmMission:
         kin = self.kinematics[arm]
         prepare_s, track_s, descend_s, close_s = 1.40, 1.60, 3.40, 0.80
@@ -986,7 +994,7 @@ class SortingDemo:
         intercept_close_s = self.data.time + time_to_close_s
         # Cross the conveyor guards at a high, fixed Cartesian waypoint. The
         # arm enters the belt corridor only after it is already above it.
-        prepare_xyz = OVERHEAD_APPROACH_XYZ.copy()
+        prepare_xyz = self._overhead_approach(arm)
         pick_xyz = self._grasp_target(arm, self._predict_part_position(object_id, time_to_close_s))
         pick_xyz[2] = max(MIN_PICK_HEIGHT_M, pick_xyz[2])
         pregrasp = pick_xyz.copy()
@@ -1085,7 +1093,7 @@ class SortingDemo:
         q_pregrasp, q_pick, _ = candidates[0]
         for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
             if stage == "prepare" and index == mission.keyframe_index:
-                prepare_xyz = OVERHEAD_APPROACH_XYZ.copy()
+                prepare_xyz = self._overhead_approach(mission.arm)
                 q_prepare = kin.solve_resolved_rate_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
                 mission.keyframes[index] = (stage, duration, q_prepare, opening)
             elif stage == "track":
