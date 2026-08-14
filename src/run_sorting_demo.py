@@ -862,8 +862,16 @@ class SortingDemo:
         return observations
 
     def _object_is_claimed(self, object_id: str) -> bool:
-        return any(mission.object_id == object_id for mission in self.missions.values()) or any(
-            assignment.object_id == object_id for assignment in self.deferred_assignments.values()
+        if any(mission.object_id == object_id for mission in self.missions.values()):
+            return True
+        if any(assignment.object_id == object_id for assignment in self.deferred_assignments.values()):
+            return True
+        if any(assignment.object_id == object_id for assignment in self.handoff_leads.values()):
+            return True
+        return any(
+            assignment is not None and assignment.object_id == object_id
+            for mission in self.missions.values()
+            for assignment in (mission.handoff_assignment, mission.handoff_lead_assignment)
         )
 
     def _predict_part_position(self, object_id: str, horizon_s: float) -> np.ndarray:
@@ -1126,13 +1134,24 @@ class SortingDemo:
 
     def _start_safe_deferred_assignments(self) -> None:
         for arm, assignment in list(self.deferred_assignments.items()):
-            if any(
-                mission.preparation_only
-                and mission.handoff_lead_assignment is not None
-                and mission.handoff_lead_assignment.object_id == assignment.object_id
-                and not mission.lead_started
-                for mission in self.missions.values()
-            ):
+            handoff_owner = next(
+                (
+                    mission
+                    for mission in self.missions.values()
+                    if mission.preparation_only
+                    and mission.handoff_lead_assignment is not None
+                    and mission.handoff_lead_assignment.object_id == assignment.object_id
+                ),
+                None,
+            )
+            if handoff_owner:
+                if handoff_owner.lead_started:
+                    self.deferred_assignments.pop(arm)
+                    self.coordinator.assignment_counts[arm] = max(
+                        0,
+                        self.coordinator.assignment_counts[arm] - 1,
+                    )
+                    self._log("handoff_claim", object_id=assignment.object_id, arm=arm.value)
                 continue
             part_y = float(self.data.qpos[self.qpos_addresses[assignment.object_id] + 1])
             if part_y < TAIL_EXIT_Y_M:
@@ -1157,6 +1176,27 @@ class SortingDemo:
             if not mission.preparation_only or not mission.preparation_complete:
                 continue
             if mission.handoff_lead_assignment is not None and not mission.lead_started:
+                lead_probe = self._plan_mission(
+                    mission.handoff_lead_assignment.arm,
+                    mission.handoff_lead_assignment.object_id,
+                    mission.handoff_lead_assignment.placement_zone,
+                )
+                physically_safe, contact_reason = self._preflight_joint_pair(
+                    lead_probe,
+                    mission,
+                    enforce_warning=False,
+                )
+                if not physically_safe:
+                    if self.data.time - mission.last_safety_hold_s >= 0.5:
+                        mission.last_safety_hold_s = self.data.time
+                        self._log(
+                            "handoff_lead_wait",
+                            object_id=mission.handoff_lead_assignment.object_id,
+                            arm=arm.value,
+                            reason="physical_path_collision",
+                            contact=contact_reason,
+                        )
+                    continue
                 if self._start_assignment(mission.handoff_lead_assignment):
                     mission.lead_started = True
                     self._start_handoff_creep(mission)
