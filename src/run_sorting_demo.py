@@ -100,6 +100,8 @@ class DemoParameters:
 CSPR_ALGORITHM_ID = "bc_jsp"
 CSPR_ALGORITHM_NAME = "BC-JSP - Bayesian Centralized Joint Strategy Planner"
 # Tool x: jaw closing direction, y: vertical finger length, z: conveyor approach.
+# Keep the proven Nova5 wrist frame until a reachable top-down frame is
+# generated and collision-screened as a complete candidate.
 GRASP_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
 
 
@@ -636,7 +638,10 @@ class SortingDemo:
             return description.endswith("_finger_pad")
 
         def is_belt(description: str) -> bool:
-            return description.startswith("belt_segment_") or description == "conveyor_safety_underlay"
+            return description.startswith("belt_segment_") or description in {
+                "conveyor_safety_underlay",
+                "conveyor_belt_collision",
+            }
 
         for index in range(data.ncon):
             contact = data.contact[index]
@@ -854,6 +859,51 @@ class SortingDemo:
             return False
         return True
 
+    def _joint_path_is_safe(
+        self,
+        arm: ArmId,
+        start_qpos: np.ndarray,
+        waypoints: list[np.ndarray],
+        gripper_opening: float = GRIP_OPEN_M,
+        samples_per_segment: int = 12,
+    ) -> bool:
+        """Check the swept arm path, not only its final IK pose."""
+        previous = start_qpos
+        for target in waypoints:
+            for ratio in np.linspace(0.0, 1.0, samples_per_segment + 1)[1:]:
+                qpos = interpolate(previous, target, float(ratio))
+                if not self._pose_is_safe(arm, qpos, gripper_opening):
+                    return False
+            previous = target
+        return True
+
+    def _tracking_ik_candidates(
+        self,
+        arm: ArmId,
+        target_xyz: np.ndarray,
+        start_qpos: np.ndarray,
+    ) -> list[tuple[np.ndarray, np.ndarray, float]]:
+        """Generate several IK branches and discard swept-belt collisions."""
+        kin = self.kinematics[arm]
+        escape_qpos = {
+            ArmId.A: np.array((-2.1728, -0.2902, -1.8000, 2.5770, 4.0202, -6.1516)),
+            ArmId.B: np.array((3.3961, 1.7425, -1.3483, 0.0000, 1.9187, 0.0000)),
+        }[arm]
+        candidates: list[tuple[np.ndarray, np.ndarray, float]] = []
+        for seed in (start_qpos, kin.home_qpos, escape_qpos):
+            q_pregrasp = kin.solve_resolved_rate_ik(
+                target_xyz + np.array((0.0, 0.0, PREGRASP_HEIGHT_M - target_xyz[2])),
+                seed,
+                max_iterations=TRACKING_IK_MAX_ITERATIONS,
+            )
+            q_pick = kin.solve_resolved_rate_ik(target_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
+            if not self._joint_path_is_safe(arm, start_qpos, [q_pregrasp, q_pick], GRIP_OPEN_M):
+                continue
+            cost = float(np.linalg.norm(q_pregrasp - start_qpos) + np.linalg.norm(q_pick - q_pregrasp))
+            candidates.append((q_pregrasp, q_pick, cost))
+        candidates.sort(key=lambda item: item[2])
+        return candidates
+
     def _update_belt(self) -> None:
         travelled = (self.parameters.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
         phase_pitch = CONVEYOR_LOOP_LENGTH_M / SEGMENT_COUNT
@@ -1001,8 +1051,14 @@ class SortingDemo:
         start = self.data.qpos[kin.qpos_addresses].copy()
         q_pregrasp = kin.solve_resolved_rate_ik(pregrasp, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
         q_pick = kin.solve_resolved_rate_ik(pick_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
-        if not self._pose_is_safe(mission.arm, q_pregrasp) or not self._pose_is_safe(mission.arm, q_pick):
+        if not self._joint_path_is_safe(
+            mission.arm,
+            start,
+            [q_pregrasp, q_pick],
+            GRIP_OPEN_M,
+        ):
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+            self._log("ik_path_reject", object_id=mission.object_id, arm=mission.arm.value, reason="swept_path_collision")
             return
         for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
             if stage == "prepare" and index == mission.keyframe_index:
@@ -1484,10 +1540,9 @@ class SortingDemo:
     def _start_assignment(self, assignment) -> bool:
         mission = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
         safe, reason = self._preflight_mission(mission)
-        if not safe and "safety_envelope" in reason:
-            # A prepared peer changes the admissible corridor. Re-evaluate the
-            # same assignment through the Bayesian route candidates instead
-            # of treating the first direct IK path as the only possibility.
+        if not safe:
+            # A final-pose failure is not enough to discard the task. Test all
+            # route candidates and keep only a complete collision-free sweep.
             for candidate in self._route_candidates(mission):
                 candidate_safe, candidate_reason = self._preflight_mission(candidate)
                 if candidate_safe:

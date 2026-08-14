@@ -68,6 +68,12 @@
       <site name="infeed_part_present" pos="0 2.15 0.135" size="0.205 0.08 0.004" rgba="0 0 0 0"/>
       <site name="tail_exit_sensor" pos="0 -2.35 0.135" size="0.205 0.08 0.004" rgba="0 0 0 0"/>
     </body>
+    <!-- Continuous static work-surface collision used by IK/path checks.
+         Belt segments remain the moving contact surface; this layer prevents
+         an arm body from entering the belt from below at a segment seam. -->
+    <body name="conveyor_collision_surface" pos="0 0.10 0">
+      <geom name="conveyor_belt_collision" type="box" pos="0 0 0.050" size="0.225 2.53 0.010" material="belt_mat" contype="1" conaffinity="24" friction="1.4 0.02 0.001"/>
+    </body>
     <body name="belt_segment_01" pos="0 0 0.075">
       <joint name="belt_segment_01_slide" type="slide" axis="0 1 0" limited="false"/>
       <geom name="belt_segment_01_geom" type="box" size="0.225 0.37 0.025" material="belt_mat" mass="3" contype="1" conaffinity="24" friction="1.4 0.02 0.001"/>
@@ -308,6 +314,14 @@
     <exclude body1="conveyor_frame" body2="belt_segment_06"/>
     <exclude body1="conveyor_frame" body2="belt_segment_07"/>
     <exclude body1="conveyor_frame" body2="belt_segment_08"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_01"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_02"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_03"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_04"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_05"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_06"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_07"/>
+    <exclude body1="conveyor_collision_surface" body2="belt_segment_08"/>
   </contact>
 
   <actuator>
