@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from central_coordinator import ArmId, ArmState, CentralCoordinator, ObjectClass, ObjectObservation
+from central_coordinator import ArmId, ArmState, Candidate, CentralCoordinator, ObjectClass, ObjectObservation
 from bayesian_joint_planner import BayesianJointGame, JointStrategyEvidence
 from run_sorting_line import (
     BELT_SPEED_MPS,
@@ -51,6 +51,10 @@ TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
 SAFETY_CHECK_PERIOD_S = 0.02
 MAX_VIEWER_SUBSTEPS = 8
+# First validate the moving-target executor independently on both arms.  The
+# centralized two-arm game remains available in the planner, but it must not
+# hide a single-arm prediction or grasp failure during this baseline pass.
+SINGLE_ARM_VALIDATION_MODE = True
 IK_SOLVER_ID = "qp_rrik"
 IK_SOLVER_NAME = "Box-Constrained QP Resolved-Rate IK"
 MIN_PICK_HEIGHT_M = 0.135
@@ -58,6 +62,8 @@ PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.30
 GRASP_XY_TOLERANCE_M = 0.055
+GRASP_PREDICTION_TOLERANCE_M = 0.075
+GRASP_Z_TOLERANCE_M = 0.060
 GRIP_OPEN_M = 0.035
 GRIP_CLOSED_M = 0.0
 # The grasp-zone site is centred between the two finger pads.  Dynamic belt
@@ -215,7 +221,6 @@ class ArmKinematics:
         otherwise the established 6D DLS solution is used for continuity.
         """
         qp_solution = self.solve_qp_velocity_ik(target_xyz, start_qpos, max_iterations=max_iterations)
-        legacy_solution = self.solve_position_ik(target_xyz, start_qpos, max_iterations=max_iterations)
 
         def residual(candidate: np.ndarray) -> float:
             saved_qpos = self.data.qpos.copy()
@@ -227,11 +232,15 @@ class ArmKinematics:
             return value
 
         qp_residual = residual(qp_solution)
-        legacy_residual = residual(legacy_solution)
         # Keep QP as the normal path, but reject an unstable branch or an
         # obviously under-converged candidate before it reaches the actuators.
-        if qp_residual <= 0.025 and np.max(np.abs(qp_solution - legacy_solution)) <= 0.45:
+        if qp_residual <= 0.025:
             return qp_solution
+        # The legacy DLS solve is a recovery path only.  Running it on every
+        # 80 ms tracking update was the main source of the frozen-looking
+        # simulation and made the prediction loop needlessly expensive.
+        legacy_solution = self.solve_position_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+        legacy_residual = residual(legacy_solution)
         return legacy_solution if legacy_residual <= qp_residual else qp_solution
 
     def solve_qp_velocity_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
@@ -429,6 +438,10 @@ class SortingDemo:
         )
         self.missions: dict[ArmId, ArmMission] = {}
         self.deferred_assignments = {}
+        self.validation_queue = []
+        # Preserve the seed-42 baseline's first assignment to B, then
+        # alternate so the following validation turn uses A.
+        self.validation_next_arm = ArmId.B
         self.handoff_leads = {}
         self.spawned: set[str] = set()
         self.placed: set[str] = set()
@@ -550,6 +563,7 @@ class SortingDemo:
             return {
                 "seed": self.seed,
                 "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
+                "execution_mode": "single_arm_predictive_validation" if SINGLE_ARM_VALIDATION_MODE else "centralized_dual_arm",
                 "ik_solver": {"id": IK_SOLVER_ID, "name": IK_SOLVER_NAME},
                 "time_s": round(float(self.data.time), 3),
                 "paused": self.paused,
@@ -573,12 +587,13 @@ class SortingDemo:
                 },
                 "missions": missions,
                 "deferred": [item.object_id for item in self.deferred_assignments.values()],
+                "validation_queue": [item.object_id for item in self.validation_queue],
                 "decision": self.latest_decision,
                 "preflight": self.last_preflight,
                 "joint_plan": self.latest_joint_plan,
                 "safety": {
                     "warning_margin_m": round(float(self.parameters.warning_margin_m), 3),
-                    "mode": "concurrent_mission_preflight",
+                    "mode": "single_arm_validation" if SINGLE_ARM_VALIDATION_MODE else "concurrent_mission_preflight",
                 },
                 "events": self.event_log[-12:],
             }
@@ -616,6 +631,13 @@ class SortingDemo:
     def _forbidden_contacts(self, data: mujoco.MjData) -> list[tuple[str, str]]:
         """Return arm-arm and arm-environment contacts; object contacts are allowed."""
         forbidden: list[tuple[str, str]] = []
+
+        def is_finger(description: str) -> bool:
+            return description.endswith("_finger_pad")
+
+        def is_belt(description: str) -> bool:
+            return description.startswith("belt_segment_") or description == "conveyor_safety_underlay"
+
         for index in range(data.ncon):
             contact = data.contact[index]
             first = self._geom_description(contact.geom1)
@@ -624,6 +646,13 @@ class SortingDemo:
             second_arm = self._arm_for_description(second)
             if first_arm is not None and second_arm is not None and first_arm is not second_arm:
                 forbidden.append((first, second))
+            elif (first_arm is not None and is_finger(first) and is_belt(second)) or (
+                second_arm is not None and is_finger(second) and is_belt(first)
+            ):
+                # A real pinch can skim the moving belt while closing.  The
+                # fingers may contact the belt, but the gripper, links and
+                # station hardware remain forbidden contacts.
+                continue
             elif first_arm is not None and not second.startswith("part_"):
                 forbidden.append((first, second))
             elif second_arm is not None and not first.startswith("part_"):
@@ -992,6 +1021,21 @@ class SortingDemo:
         mission.tracking_updates += 1
         mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
 
+    def _grasp_window_ready(self, arm: ArmId, object_id: str) -> bool:
+        """Require both measured proximity and belt-speed prediction agreement."""
+        kin = self.kinematics[arm]
+        object_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
+        grasp_xyz = kin.grasp_position()
+        predicted_xyz = self._predict_part_position(object_id, TRACKING_LEAD_S)
+        measured_xy_error = float(np.linalg.norm(object_xyz[:2] - grasp_xyz[:2]))
+        predicted_xy_error = float(np.linalg.norm(predicted_xyz[:2] - grasp_xyz[:2]))
+        measured_z_error = abs(float(object_xyz[2] - grasp_xyz[2]))
+        return (
+            measured_xy_error <= GRASP_XY_TOLERANCE_M
+            and predicted_xy_error <= GRASP_PREDICTION_TOLERANCE_M
+            and measured_z_error <= GRASP_Z_TOLERANCE_M
+        )
+
     def _schedule(self) -> None:
         if self.data.time - self.last_schedule_s < SCHEDULER_PERIOD_S:
             return
@@ -1026,7 +1070,8 @@ class SortingDemo:
         # peer can enter the 3 x 3 joint-strategy game with it.
         future_arrivals = [item.spawn_time_s for item in self.items if item.part_name not in self.spawned]
         should_batch = (
-            not self.missions
+            not SINGLE_ARM_VALIDATION_MODE
+            and not self.missions
             and not self.deferred_assignments
             and len(observations) == 1
             and self.parameters.feed_interval_s < self.coordinator.fixed_cycle_s
@@ -1054,6 +1099,53 @@ class SortingDemo:
                 "rejected": decision.rejected,
             }
         available = [item for item in decision.assignments if not self._object_is_claimed(item.object_id)]
+        if SINGLE_ARM_VALIDATION_MODE:
+            # Keep one executor active so the belt-speed intercept can be
+            # judged without joint-route or handoff effects.  The same path
+            # is used for A and B; the next arm gets its turn after release.
+            if self.missions:
+                self.latest_decision = {
+                    "assignments": [],
+                    "rejected": {},
+                    "status": "single_arm_validation_busy",
+                }
+                return
+            candidates = list(self.validation_queue)
+            self.validation_queue.clear()
+            candidates.extend(available)
+            for index, assignment in enumerate(candidates):
+                if assignment.arm is not self.validation_next_arm and assignment.object_class is ObjectClass.MIDDLE:
+                    # The coordinator may prefer the same arm repeatedly by
+                    # cost.  Alternate the baseline executor explicitly so
+                    # both physical arms are validated with identical logic.
+                    original_arm = assignment.arm
+                    assignment = Candidate(
+                        self.validation_next_arm,
+                        assignment.object_id,
+                        assignment.object_class,
+                        assignment.workspace_zone,
+                        "left_bin" if self.validation_next_arm is ArmId.A else "right_bin",
+                        assignment.interval_s,
+                        assignment.score,
+                    )
+                    self.coordinator.assignment_counts[original_arm] = max(
+                        0,
+                        self.coordinator.assignment_counts[original_arm] - 1,
+                    )
+                    self.coordinator.assignment_counts[assignment.arm] += 1
+                part_y = float(self.data.qpos[self.qpos_addresses[assignment.object_id] + 1])
+                if part_y < TAIL_EXIT_Y_M:
+                    self.missed.add(assignment.object_id)
+                    self.coordinator.mark_completed(assignment.object_id)
+                    self._log("missed", object_id=assignment.object_id, reason="tail_exit_while_validation_queued")
+                    continue
+                if self._start_assignment(assignment):
+                    self.validation_queue.extend(candidates[index + 1 :])
+                    self.validation_next_arm = ArmId.B if assignment.arm is ArmId.A else ArmId.A
+                    self.latest_decision["status"] = "single_arm_validation"
+                    return
+            self.validation_queue.clear()
+            return
         if len(available) == 2 and all(item.arm not in self.missions for item in available):
             self._start_joint_assignments(available)
             return
@@ -1455,6 +1547,16 @@ class SortingDemo:
                 commanded_opening = GRIP_OPEN_M * smoothstep(elapsed / duration)
             else:
                 commanded_opening = opening
+            # Do not close at a stale waypoint.  The object is moving with
+            # the belt, so hold the close stage open until the measured pose
+            # and the velocity-predicted pose both enter the grasp window.
+            if stage == "close" and not self._grasp_window_ready(arm, mission.object_id):
+                kin.command_joint_pose(target, GRIP_OPEN_M)
+                mission.keyframe_started_s += CONTROL_STEP_S
+                if self.data.time - mission.last_safety_hold_s >= 0.5:
+                    mission.last_safety_hold_s = self.data.time
+                    self._log("grasp_wait", object_id=mission.object_id, arm=arm.value, reason="outside_predicted_grasp_window")
+                continue
             if stage == "open" and not mission.release_started:
                 touching_fingers = self._touching_fingers(arm, mission.object_id)
                 if touching_fingers != kin.finger_geom_ids:
@@ -1614,12 +1716,13 @@ class SortingDemo:
         with self.state_lock:
             self._update_belt()
             active_parts = len(self.spawned - self.placed - self.missed)
+            effective_capacity = 1 if SINGLE_ARM_VALIDATION_MODE else int(self.parameters.max_active_parts)
             for item in self.items:
                 if item.part_name not in self.spawned and self.data.time >= item.spawn_time_s:
                     # Items with the same scheduled timestamp form one batch.
                     # Capacity remains authoritative if an older batch has not
                     # yet cleared the physical line.
-                    if active_parts >= int(self.parameters.max_active_parts) or not self._has_available_handler(item):
+                    if active_parts >= effective_capacity or not self._has_available_handler(item):
                         break
                     place_part(self.data, self.qpos_addresses[item.part_name], item.spawn_xyz)
                     self.spawned.add(item.part_name)
