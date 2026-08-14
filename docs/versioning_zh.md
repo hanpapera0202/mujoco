@@ -12,4 +12,4 @@
 
 其中 `<scope>` 可為 `sim`、`planner`、`grasp`、`model`、`dashboard`、`docs` 或 `build`。發布版本時必須建立並推送同名 Git tag，例如 `v0.2.0`。
 
-目前版本 `0.13.1` 改用 `CR-RRIK`（Continuity-Regularized Resolved-Rate IK）。它以阻尼 Jacobian 求末端速度，加入零空間姿勢連續項與關節限位邊界，降低等價 IK 分支造成的手肘翻轉與腕部奇異姿勢。handoff 接近段採逐級完整實體預檢，執行期仍啟用 10 cm 警戒盒保護；追蹤 IK 採 24 次 warm-start 迭代與 8 mm 位移門檻。
+目前版本 `0.14.0` 延續 `CR-RRIK` 與雙臂 handoff 安全流程，新增獨立單臂場景。`nova5_single_arm_sorting_line.xml` 移除 B 臂、B 臂致動器/感測器與右側出料盤，但保留 8 節物理輸送帶、斜坡投料、動態物件、A 臂夾爪與左側出料盤；`run_single_arm_demo.py` 可直接啟動單臂 MuJoCo 演示。

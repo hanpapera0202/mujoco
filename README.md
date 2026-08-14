@@ -24,7 +24,9 @@ python src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
 
-目前版本：`0.13.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+目前版本：`0.14.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
+
+本版新增獨立單臂場景：`models/nova5/nova5_single_arm_sorting_line.xml` 與 `src/run_single_arm_demo.py`。它保留長輸送帶、斜坡投料、動態物件、物理夾爪與左側出料盤，移除 B 臂及雙臂協調器，可單獨重現單臂抓取產線。
 
 本版 IK 改用 `CR-RRIK`（Continuity-Regularized Resolved-Rate IK）：以阻尼 Jacobian 求解末端速度，加入零空間姿勢連續項與關節限位邊界，降低手肘翻轉及腕部突然繞轉。
 
