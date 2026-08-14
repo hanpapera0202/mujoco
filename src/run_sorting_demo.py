@@ -57,13 +57,18 @@ MAX_VIEWER_SUBSTEPS = 8
 SINGLE_ARM_VALIDATION_MODE = True
 IK_SOLVER_ID = "qp_rrik"
 IK_SOLVER_NAME = "Box-Constrained QP Resolved-Rate IK"
-MIN_PICK_HEIGHT_M = 0.135
+# The grasp site is centered on the part, while the finger pads extend below
+# it. Keep the site 30 mm above the belt center so the palm/forearm clear the
+# moving belt and the pads still cover a 60 mm tall part.
+MIN_PICK_HEIGHT_M = 0.16
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.30
+OVERHEAD_APPROACH_XYZ = np.array((0.0, 0.25, 0.75))
 GRASP_XY_TOLERANCE_M = 0.055
 GRASP_PREDICTION_TOLERANCE_M = 0.075
 GRASP_Z_TOLERANCE_M = 0.060
+GRASP_ORIENTATION_TOLERANCE = 0.16
 GRIP_OPEN_M = 0.035
 GRIP_CLOSED_M = 0.0
 # The grasp-zone site is centred between the two finger pads.  Dynamic belt
@@ -99,10 +104,10 @@ class DemoParameters:
 
 CSPR_ALGORITHM_ID = "bc_jsp"
 CSPR_ALGORITHM_NAME = "BC-JSP - Bayesian Centralized Joint Strategy Planner"
-# Tool x: jaw closing direction, y: vertical finger length, z: conveyor approach.
-# Keep the proven Nova5 wrist frame until a reachable top-down frame is
-# generated and collision-screened as a complete candidate.
-GRASP_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
+# Normal Nova5 tool frame for travel and tray placement.
+GENERAL_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
+# Reachable top-down frame: local -Z points down to the belt.
+GRASP_XMAT = np.diag((-1.0, -1.0, 1.0))
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,10 @@ class ArmKinematics:
             model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{side}_finger_slide")]
             for side in ("left", "right")
         ])
+        self.finger_dof_addresses = np.array([
+            model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{prefix}_{side}_finger_slide")]
+            for side in ("left", "right")
+        ])
         self.position_actuator_ids = np.array([
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, f"{prefix}_joint{index}_position")
             for index in range(1, 7)
@@ -187,15 +196,16 @@ class ArmKinematics:
     def grasp_position(self) -> np.ndarray:
         return self.data.site_xpos[self.grasp_site_id].copy()
 
-    def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
+    def solve_position_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360, target_xmat: np.ndarray | None = None) -> np.ndarray:
         """Stable batch IK used for initial collision-screened trajectories."""
+        target_xmat = GRASP_XMAT if target_xmat is None else target_xmat
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
         for _ in range(max_iterations):
             mujoco.mj_forward(self.model, self.data)
             current_xmat = self.data.site_xmat[self.grasp_site_id].reshape(3, 3)
             position_error = target_xyz - self.grasp_position()
-            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], GRASP_XMAT[:, index]) for index in range(3))
+            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], target_xmat[:, index]) for index in range(3))
             error = np.concatenate((position_error, 0.28 * rotation_error))
             if np.linalg.norm(position_error) < 0.012 and np.linalg.norm(rotation_error) < 0.05:
                 break
@@ -215,14 +225,15 @@ class ArmKinematics:
         mujoco.mj_forward(self.model, self.data)
         return solution
 
-    def solve_resolved_rate_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
+    def solve_resolved_rate_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360, target_xmat: np.ndarray | None = None) -> np.ndarray:
         """QP tracking with a deterministic feasibility fallback.
 
         QP is the primary solver.  A candidate is accepted only when it stays
         close to the target and does not jump to a different joint branch;
         otherwise the established 6D DLS solution is used for continuity.
         """
-        qp_solution = self.solve_qp_velocity_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+        target_xmat = GRASP_XMAT if target_xmat is None else target_xmat
+        qp_solution = self.solve_qp_velocity_ik(target_xyz, start_qpos, max_iterations=max_iterations, target_xmat=target_xmat)
 
         def residual(candidate: np.ndarray) -> float:
             saved_qpos = self.data.qpos.copy()
@@ -241,24 +252,25 @@ class ArmKinematics:
         # The legacy DLS solve is a recovery path only.  Running it on every
         # 80 ms tracking update was the main source of the frozen-looking
         # simulation and made the prediction loop needlessly expensive.
-        legacy_solution = self.solve_position_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+        legacy_solution = self.solve_position_ik(target_xyz, start_qpos, max_iterations=max_iterations, target_xmat=target_xmat)
         legacy_residual = residual(legacy_solution)
         return legacy_solution if legacy_residual <= qp_residual else qp_solution
 
-    def solve_qp_velocity_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
+    def solve_qp_velocity_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360, target_xmat: np.ndarray | None = None) -> np.ndarray:
         """Box-constrained velocity QP with posture continuity and joint limits.
 
         The six-joint problem is solved with projected gradient iterations,
         avoiding a heavyweight runtime dependency while keeping velocity and
         joint-position bounds explicit.
         """
+        target_xmat = GRASP_XMAT if target_xmat is None else target_xmat
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
         for _ in range(max_iterations):
             mujoco.mj_forward(self.model, self.data)
             current_xmat = self.data.site_xmat[self.grasp_site_id].reshape(3, 3)
             position_error = target_xyz - self.grasp_position()
-            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], GRASP_XMAT[:, index]) for index in range(3))
+            rotation_error = 0.5 * sum(np.cross(current_xmat[:, index], target_xmat[:, index]) for index in range(3))
             error = np.concatenate((position_error, 0.28 * rotation_error))
             if np.linalg.norm(position_error) < 0.012 and np.linalg.norm(rotation_error) < 0.05:
                 break
@@ -972,8 +984,9 @@ class SortingDemo:
         prepare_s, track_s, descend_s, close_s = 1.40, 1.60, 3.40, 0.80
         time_to_close_s = prepare_s + track_s + descend_s + close_s
         intercept_close_s = self.data.time + time_to_close_s
-        prepare_xyz = self._grasp_target(arm, self._predict_part_position(object_id, prepare_s))
-        prepare_xyz[2] = 0.56
+        # Cross the conveyor guards at a high, fixed Cartesian waypoint. The
+        # arm enters the belt corridor only after it is already above it.
+        prepare_xyz = OVERHEAD_APPROACH_XYZ.copy()
         pick_xyz = self._grasp_target(arm, self._predict_part_position(object_id, time_to_close_s))
         pick_xyz[2] = max(MIN_PICK_HEIGHT_M, pick_xyz[2])
         pregrasp = pick_xyz.copy()
@@ -995,8 +1008,8 @@ class SortingDemo:
         q_prepare = kin.solve_position_ik(prepare_xyz, q_home)
         q_pregrasp = kin.solve_position_ik(pregrasp, q_prepare)
         q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp)
-        q_bin_approach = kin.solve_position_ik(bin_approach, q_pregrasp)
-        q_drop = kin.solve_position_ik(drop, q_bin_approach)
+        q_bin_approach = kin.solve_position_ik(bin_approach, q_pregrasp, target_xmat=GENERAL_XMAT)
+        q_drop = kin.solve_position_ik(drop, q_bin_approach, target_xmat=GENERAL_XMAT)
         keyframes = [
                 ("prepare", prepare_s, q_prepare, GRIP_OPEN_M),
                 ("track", track_s, q_pregrasp, GRIP_OPEN_M),
@@ -1035,6 +1048,12 @@ class SortingDemo:
         current_stage = mission.keyframes[mission.keyframe_index][0]
         if current_stage not in ("prepare", "track", "descend", "close"):
             return
+        # The overhead approach is a committed collision-screened segment.
+        # Do not replace it with a direct current->pick IK path while it is
+        # still in progress; that was the source of the guard collision.
+        if current_stage == "prepare":
+            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+            return
 
         # Follow the observed conveyor body instead of repeatedly aiming at one
         # old intercept. A small lead compensates actuator and IK latency.
@@ -1049,21 +1068,24 @@ class SortingDemo:
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
         start = self.data.qpos[kin.qpos_addresses].copy()
-        q_pregrasp = kin.solve_resolved_rate_ik(pregrasp, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
-        q_pick = kin.solve_resolved_rate_ik(pick_xyz, q_pregrasp, max_iterations=TRACKING_IK_MAX_ITERATIONS)
-        if not self._joint_path_is_safe(
-            mission.arm,
-            start,
-            [q_pregrasp, q_pick],
-            GRIP_OPEN_M,
-        ):
+        candidates = self._tracking_ik_candidates(mission.arm, pick_xyz, start)
+        if not candidates:
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             self._log("ik_path_reject", object_id=mission.object_id, arm=mission.arm.value, reason="swept_path_collision")
+            # A rejected dynamic path must never leave the previous target in
+            # the executor.  Hold the last physically screened pose until a
+            # new branch is found; otherwise a stale target can drive the
+            # palm through a conveyor guard between two IK updates.
+            hold_qpos = mission.last_safe_qpos.copy() if mission.last_safe_qpos is not None else start
+            for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
+                if index >= mission.keyframe_index and stage in ("track", "descend", "close", "lift"):
+                    mission.keyframes[index] = (stage, duration, hold_qpos.copy(), opening)
+            mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes[mission.keyframe_index :])
             return
+        q_pregrasp, q_pick, _ = candidates[0]
         for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
             if stage == "prepare" and index == mission.keyframe_index:
-                prepare_xyz = pick_xyz.copy()
-                prepare_xyz[2] = 0.56
+                prepare_xyz = OVERHEAD_APPROACH_XYZ.copy()
                 q_prepare = kin.solve_resolved_rate_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
                 mission.keyframes[index] = (stage, duration, q_prepare, opening)
             elif stage == "track":
@@ -1718,12 +1740,34 @@ class SortingDemo:
         """Accept a grasp only after a physical finger-pad contact is reported."""
         kin = self.kinematics[arm]
         touching_fingers = self._touching_fingers(arm, mission.object_id)
-        if touching_fingers == kin.finger_geom_ids:
+        object_xyz = self.data.qpos[self.qpos_addresses[mission.object_id] : self.qpos_addresses[mission.object_id] + 3]
+        position_error = float(np.linalg.norm(object_xyz - kin.grasp_position()))
+        current_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3)
+        orientation_error = float(
+            np.linalg.norm(
+                0.5 * sum(np.cross(current_xmat[:, index], GRASP_XMAT[:, index]) for index in range(3))
+            )
+        )
+        if (
+            touching_fingers == kin.finger_geom_ids
+            and position_error <= GRASP_XY_TOLERANCE_M
+            and orientation_error <= GRASP_ORIENTATION_TOLERANCE
+        ):
             mission.grasped = True
             self.arm_outcomes[arm]["grasped"] += 1
-            self._log("grasp", object_id=mission.object_id, arm=arm.value, contact="bilateral_finger_physical", finger_count=len(touching_fingers), grasp_constraint="none")
+            self._log(
+                "grasp",
+                object_id=mission.object_id,
+                arm=arm.value,
+                contact="bilateral_finger_physical",
+                finger_count=len(touching_fingers),
+                grasp_constraint="none",
+                position_error_m=round(position_error, 4),
+                orientation_error=round(orientation_error, 4),
+            )
             return True
-        self._fail_grasp(arm, mission, "no_bilateral_finger_contact", touching_fingers)
+        reason = "no_bilateral_finger_contact" if touching_fingers != kin.finger_geom_ids else "grasp_pose_error"
+        self._fail_grasp(arm, mission, reason, touching_fingers)
         return False
 
     def _touching_fingers(self, arm: ArmId, object_id: str) -> set[int]:
@@ -1813,7 +1857,16 @@ class SortingDemo:
             if mission.last_safe_qpos is None:
                 continue
             _, _, _, opening = mission.keyframes[mission.keyframe_index]
-            self.kinematics[arm].command_joint_pose(mission.last_safe_qpos, opening)
+            kin = self.kinematics[arm]
+            # Position-control targets alone do not remove an already-created
+            # contact: MuJoCo keeps the penetrated qpos until dynamics resolve
+            # it. Restore the last screened state before the next forward pass
+            # so a recoverable contact cannot become a permanent safety stop.
+            self.data.qpos[kin.qpos_addresses] = mission.last_safe_qpos
+            self.data.qvel[kin.dof_addresses] = 0.0
+            self.data.qpos[kin.finger_qpos_addresses] = opening
+            self.data.qvel[kin.finger_dof_addresses] = 0.0
+            kin.command_joint_pose(mission.last_safe_qpos, opening)
 
     def _abort_unsafe_missions(self, contacts: list[tuple[str, str]]) -> None:
         unsafe_arms = {arm for pair in contacts for arm in (self._arm_for_description(pair[0]), self._arm_for_description(pair[1])) if arm is not None}
