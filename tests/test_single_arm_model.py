@@ -21,6 +21,12 @@ class SingleArmModelTests(unittest.TestCase):
             self.assertIsNotNone(model.body(f"belt_segment_{index:02d}"))
         self.assertIsNotNone(model.site("left_bin_drop"))
 
+    def test_rotary_joints_do_not_exceed_one_full_turn(self):
+        model = mujoco.MjModel.from_xml_path(str(MODEL))
+        for index in (1, 4, 5, 6):
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"A_joint{index}")
+            self.assertLessEqual(float(model.jnt_range[joint_id, 1] - model.jnt_range[joint_id, 0]), 2.0 * 3.1416)
+
     def test_single_arm_demo_advances_dynamic_conveyor(self):
         demo = SingleArmDemo(seed=42)
         initial = float(demo.data.qpos[demo.qpos["part_01"] + 1])

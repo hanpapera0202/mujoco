@@ -170,7 +170,7 @@
       <geom name="A_base_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
       <body name="A_Link1" pos="0 0 0.24">
         <inertial pos="9.18643e-06 -0.0217708 -0.0261834" quat="0.684555 0.177181 -0.176991 0.684592" mass="1.08091" diaginertia="0.00284011 0.00265963 0.00128069"/>
-        <joint name="A_joint1" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="3.0" armature="0.03"/>
+        <joint name="A_joint1" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="3.0" armature="0.03"/>
         <geom name="A_Link1_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link1"/>
         <body name="A_Link2" quat="-0.491193 -0.49119 -0.508657 0.508654">
           <inertial pos="-0.199338 -0.00696463 0.109209" quat="-0.0124484 0.700654 0.0122458 0.713287" mass="2.54585" diaginertia="0.0643202 0.0637511 0.00275793"/>
@@ -186,15 +186,15 @@
             <geom name="A_forearm_warning" type="box" pos="-0.165 -0.006 0.065" size="0.29 0.160 0.190" rgba="0.20 0.55 1 0.035" contype="0" conaffinity="0"/>
             <body name="A_Link4" pos="-0.329799 -0.0115244 0.135" quat="0.719348 0 0 -0.69465">
               <inertial pos="-6.37112e-06 -0.022759 -0.0202382" quat="0.648587 0.282308 -0.28212 0.648109" mass="0.439666" diaginertia="0.000676686 0.000634739 0.000253769"/>
-              <joint name="A_joint4" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+              <joint name="A_joint4" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="2.0" armature="0.02"/>
               <geom name="A_Link4_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link4" contype="2" conaffinity="4"/>
               <body name="A_Link5" pos="0 -0.12 0" quat="0.707105 0.707108 0 0">
                 <inertial pos="-1.27926e-06 0.00190912 -0.00761119" quat="0.393821 0.587386 -0.587227 0.39376" mass="0.574835" diaginertia="0.00069052 0.000663177 0.000348157"/>
-                <joint name="A_joint5" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+                <joint name="A_joint5" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="2.0" armature="0.02"/>
                 <geom name="A_Link5_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link5" contype="2" conaffinity="4"/>
                 <body name="A_Link6" pos="0 0.088328 0" quat="0.707105 -0.707108 0 0">
                   <inertial pos="1.54762e-06 0.000151599 -0.0194592" quat="0.000736825 0.707106 0.000566044 0.707107" mass="0.12968" diaginertia="7.78631e-05 5.054e-05 5.02803e-05"/>
-                  <joint name="A_joint6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="1.5" armature="0.015"/>
+                  <joint name="A_joint6" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="1.5" armature="0.015"/>
                   <geom name="A_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6" contype="2" conaffinity="4"/>
                   <site name="A_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
                   <body name="A_gripper" pos="0 0 -0.09">
@@ -228,7 +228,7 @@
       <geom name="B_base_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link"/>
       <body name="B_Link1" pos="0 0 0.24">
         <inertial pos="9.18643e-06 -0.0217708 -0.0261834" quat="0.684555 0.177181 -0.176991 0.684592" mass="1.08091" diaginertia="0.00284011 0.00265963 0.00128069"/>
-        <joint name="B_joint1" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="3.0" armature="0.03"/>
+        <joint name="B_joint1" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="3.0" armature="0.03"/>
         <geom name="B_Link1_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link1"/>
         <body name="B_Link2" quat="-0.491193 -0.49119 -0.508657 0.508654">
           <inertial pos="-0.199338 -0.00696463 0.109209" quat="-0.0124484 0.700654 0.0122458 0.713287" mass="2.54585" diaginertia="0.0643202 0.0637511 0.00275793"/>
@@ -244,15 +244,15 @@
             <geom name="B_forearm_warning" type="box" pos="-0.165 -0.006 0.065" size="0.29 0.160 0.190" rgba="1.00 0.48 0.12 0.035" contype="0" conaffinity="0"/>
             <body name="B_Link4" pos="-0.329799 -0.0115244 0.135" quat="0.719348 0 0 -0.69465">
               <inertial pos="-6.37112e-06 -0.022759 -0.0202382" quat="0.648587 0.282308 -0.28212 0.648109" mass="0.439666" diaginertia="0.000676686 0.000634739 0.000253769"/>
-              <joint name="B_joint4" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+              <joint name="B_joint4" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="2.0" armature="0.02"/>
               <geom name="B_Link4_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link4" contype="4" conaffinity="2"/>
               <body name="B_Link5" pos="0 -0.12 0" quat="0.707105 0.707108 0 0">
                 <inertial pos="-1.27926e-06 0.00190912 -0.00761119" quat="0.393821 0.587386 -0.587227 0.39376" mass="0.574835" diaginertia="0.00069052 0.000663177 0.000348157"/>
-                <joint name="B_joint5" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="2.0" armature="0.02"/>
+                <joint name="B_joint5" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="2.0" armature="0.02"/>
                 <geom name="B_Link5_visual" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="Link5" contype="4" conaffinity="2"/>
                 <body name="B_Link6" pos="0 0.088328 0" quat="0.707105 -0.707108 0 0">
                   <inertial pos="1.54762e-06 0.000151599 -0.0194592" quat="0.000736825 0.707106 0.000566044 0.707107" mass="0.12968" diaginertia="7.78631e-05 5.054e-05 5.02803e-05"/>
-                  <joint name="B_joint6" pos="0 0 0" axis="0 0 1" range="-6.28 6.28" limited="true" damping="1.5" armature="0.015"/>
+                  <joint name="B_joint6" pos="0 0 0" axis="0 0 1" range="-3.1416 3.1416" limited="true" damping="1.5" armature="0.015"/>
                   <geom name="B_Link6_visual" type="mesh" rgba="0.752941 0.752941 0.752941 1" mesh="Link6" contype="4" conaffinity="2"/>
                   <site name="B_flange" pos="0 0 0" size="0.018" rgba="0.2 0.5 1 1"/>
                   <body name="B_gripper" pos="0 0 -0.09">
@@ -311,21 +311,21 @@
   </contact>
 
   <actuator>
-    <position name="A_joint1_position" joint="A_joint1" kp="300" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-160 160"/>
+    <position name="A_joint1_position" joint="A_joint1" kp="300" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-160 160"/>
     <position name="A_joint2_position" joint="A_joint2" kp="400" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-240 240"/>
     <position name="A_joint3_position" joint="A_joint3" kp="350" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-180 180"/>
-    <position name="A_joint4_position" joint="A_joint4" kp="250" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-100 100"/>
-    <position name="A_joint5_position" joint="A_joint5" kp="220" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
-    <position name="A_joint6_position" joint="A_joint6" kp="150" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="A_joint4_position" joint="A_joint4" kp="250" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-100 100"/>
+    <position name="A_joint5_position" joint="A_joint5" kp="220" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-80 80"/>
+    <position name="A_joint6_position" joint="A_joint6" kp="150" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-50 50"/>
     <position name="A_left_finger_position" joint="A_left_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
     <position name="A_right_finger_position" joint="A_right_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
 
-    <position name="B_joint1_position" joint="B_joint1" kp="300" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-160 160"/>
+    <position name="B_joint1_position" joint="B_joint1" kp="300" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-160 160"/>
     <position name="B_joint2_position" joint="B_joint2" kp="400" ctrllimited="true" ctrlrange="-3.14 3.14" forcelimited="true" forcerange="-240 240"/>
     <position name="B_joint3_position" joint="B_joint3" kp="350" ctrllimited="true" ctrlrange="-2.79 2.79" forcelimited="true" forcerange="-180 180"/>
-    <position name="B_joint4_position" joint="B_joint4" kp="250" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-100 100"/>
-    <position name="B_joint5_position" joint="B_joint5" kp="220" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-80 80"/>
-    <position name="B_joint6_position" joint="B_joint6" kp="150" ctrllimited="true" ctrlrange="-6.28 6.28" forcelimited="true" forcerange="-50 50"/>
+    <position name="B_joint4_position" joint="B_joint4" kp="250" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-100 100"/>
+    <position name="B_joint5_position" joint="B_joint5" kp="220" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-80 80"/>
+    <position name="B_joint6_position" joint="B_joint6" kp="150" ctrllimited="true" ctrlrange="-3.1416 3.1416" forcelimited="true" forcerange="-50 50"/>
     <position name="B_left_finger_position" joint="B_left_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
     <position name="B_right_finger_position" joint="B_right_finger_slide" kp="300" ctrllimited="true" ctrlrange="0 0.035" forcelimited="true" forcerange="-20 20"/>
   </actuator>
