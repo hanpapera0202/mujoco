@@ -51,8 +51,8 @@ TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
 SAFETY_CHECK_PERIOD_S = 0.02
 MAX_VIEWER_SUBSTEPS = 8
-IK_SOLVER_ID = "cr_rrik"
-IK_SOLVER_NAME = "Continuity-Regularized Resolved-Rate IK"
+IK_SOLVER_ID = "qp_rrik"
+IK_SOLVER_NAME = "Box-Constrained QP Resolved-Rate IK"
 MIN_PICK_HEIGHT_M = 0.135
 PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
@@ -171,6 +171,7 @@ class ArmKinematics:
             for side in ("left", "right")
         }
         self.home_qpos = data.qpos[self.qpos_addresses].copy()
+        self.last_commanded_qpos: np.ndarray | None = None
 
     def tool_position(self) -> np.ndarray:
         return self.data.site_xpos[self.tool_site_id].copy()
@@ -207,12 +208,38 @@ class ArmKinematics:
         return solution
 
     def solve_resolved_rate_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
-        """Resolved-rate IK with posture continuity and joint-limit avoidance.
+        """QP tracking with a deterministic feasibility fallback.
 
-        The damped Jacobian solves the Cartesian velocity, while the null-space
-        term keeps the solution near the incoming posture and the arm home pose.
-        This prevents equivalent elbow/wrist branches from flipping between
-        dense conveyor updates.
+        QP is the primary solver.  A candidate is accepted only when it stays
+        close to the target and does not jump to a different joint branch;
+        otherwise the established 6D DLS solution is used for continuity.
+        """
+        qp_solution = self.solve_qp_velocity_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+        legacy_solution = self.solve_position_ik(target_xyz, start_qpos, max_iterations=max_iterations)
+
+        def residual(candidate: np.ndarray) -> float:
+            saved_qpos = self.data.qpos.copy()
+            self.data.qpos[self.qpos_addresses] = candidate
+            mujoco.mj_forward(self.model, self.data)
+            value = float(np.linalg.norm(target_xyz - self.grasp_position()))
+            self.data.qpos[:] = saved_qpos
+            mujoco.mj_forward(self.model, self.data)
+            return value
+
+        qp_residual = residual(qp_solution)
+        legacy_residual = residual(legacy_solution)
+        # Keep QP as the normal path, but reject an unstable branch or an
+        # obviously under-converged candidate before it reaches the actuators.
+        if qp_residual <= 0.025 and np.max(np.abs(qp_solution - legacy_solution)) <= 0.45:
+            return qp_solution
+        return legacy_solution if legacy_residual <= qp_residual else qp_solution
+
+    def solve_qp_velocity_ik(self, target_xyz: np.ndarray, start_qpos: np.ndarray, *, max_iterations: int = 360) -> np.ndarray:
+        """Box-constrained velocity QP with posture continuity and joint limits.
+
+        The six-joint problem is solved with projected gradient iterations,
+        avoiding a heavyweight runtime dependency while keeping velocity and
+        joint-position bounds explicit.
         """
         saved_qpos = self.data.qpos.copy()
         self.data.qpos[self.qpos_addresses] = start_qpos
@@ -228,14 +255,22 @@ class ArmKinematics:
             rotation_jacobian = np.zeros((3, self.model.nv))
             mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
             selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
-            damping = 0.035 + 0.02 * min(1.0, np.linalg.norm(error))
-            inverse = selected.T @ np.linalg.solve(selected @ selected.T + damping * np.eye(6), np.eye(6))
-            resolved_rate = inverse @ error
-            posture_error = 0.18 * (self.home_qpos - self.data.qpos[self.qpos_addresses])
-            nullspace = np.eye(6) - inverse @ selected
-            step = resolved_rate + nullspace @ posture_error
-            step *= min(1.0, 0.11 / max(np.linalg.norm(step), 1e-9))
-            updated = self.data.qpos[self.qpos_addresses] + step
+            q = self.data.qpos[self.qpos_addresses].copy()
+            damping = 0.04 + 0.02 * min(1.0, np.linalg.norm(error))
+            posture_weight = 0.025
+            hessian = selected.T @ selected + (damping + posture_weight) * np.eye(6)
+            gradient = -selected.T @ error + posture_weight * (q - self.home_qpos)
+            lower = np.empty(6)
+            upper = np.empty(6)
+            for index, joint_id in enumerate(self.joint_ids):
+                joint_low, joint_high = self.model.jnt_range[joint_id]
+                lower[index] = max(-0.11, joint_low + 0.02 - q[index])
+                upper[index] = min(0.11, joint_high - 0.02 - q[index])
+            # The active set is only six dimensions. Solve the unconstrained
+            # Newton step directly, then project to the box; repeated outer
+            # iterations re-linearize the Jacobian and refine the active set.
+            step = np.clip(-np.linalg.solve(hessian, gradient), lower, upper)
+            updated = q + step
             for index, joint_id in enumerate(self.joint_ids):
                 low, high = self.model.jnt_range[joint_id]
                 margin = 0.02 + 0.02 * min(1.0, abs(updated[index] - self.home_qpos[index]))
@@ -254,6 +289,16 @@ class ArmKinematics:
             self.data.qpos[self.qpos_addresses] = qpos
             self.data.qvel[self.dof_addresses] = 0.0
             self.data.qpos[self.finger_qpos_addresses] = gripper_opening
+            self.last_commanded_qpos = qpos.copy()
+        elif self.last_commanded_qpos is not None:
+            # IK may switch between numerically equivalent wrist solutions.
+            # Rate-limit the actuator target so MuJoCo never chases a sudden
+            # branch change and produces the visible twisting/wriggle.
+            delta = np.clip(qpos - self.last_commanded_qpos, -0.08, 0.08)
+            qpos = self.last_commanded_qpos + delta
+            self.last_commanded_qpos = qpos.copy()
+        else:
+            self.last_commanded_qpos = qpos.copy()
         self.data.ctrl[self.position_actuator_ids] = qpos
         self.data.ctrl[self.finger_actuator_ids] = gripper_opening
 

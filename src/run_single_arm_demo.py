@@ -7,7 +7,10 @@ the same moving belt and free-body parts, but gives one A arm all assignments.
 from __future__ import annotations
 
 import argparse
+import threading
 import time
+import webbrowser
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +20,7 @@ import mujoco.viewer
 
 from central_coordinator import ArmId
 from run_sorting_demo import (
+    DemoParameters,
     GRIP_CLOSED_M,
     GRIP_OPEN_M,
     MIN_PICK_HEIGHT_M,
@@ -50,8 +54,16 @@ class SingleArmDemo:
         self.model.opt.timestep = CONTROL_STEP_S
         self.data = mujoco.MjData(self.model)
         self.seed = seed
+        self.parameters = DemoParameters(feed_interval_s=FEED_INTERVAL_S, max_active_parts=1.0, feed_batch_size=1.0)
+        self.belt_speed_mps = BELT_SPEED_MPS
+        self.feed_interval_s = FEED_INTERVAL_S
+        self.simulation_speed = 1.0
+        self.paused = False
+        self.reset_requested = threading.Event()
+        self.viewer_active = False
+        self.viewer_launching = False
         self.kin = ArmKinematics(self.model, self.data, arm=ArmId.A)
-        self.items = make_demo_items(seed, FEED_INTERVAL_S, 1, (-0.15, 0.15), (1.15, 1.25))
+        self.items = make_demo_items(seed, self.feed_interval_s, 1, (-0.15, 0.15), (1.15, 1.25))
         self.qpos = {name: joint_qpos_address(self.model, name) for name in PART_NAMES}
         self.qvel = {name: joint_dof_address(self.model, name) for name in PART_NAMES}
         self.segment_qpos = [joint_qpos_address(self.model, f"belt_segment_{i:02d}") for i in range(1, SEGMENT_COUNT + 1)]
@@ -68,16 +80,94 @@ class SingleArmDemo:
         self._update_belt()
         mujoco.mj_forward(self.model, self.data)
 
+    def request_reset(self) -> None:
+        self.reset_requested.set()
+
+    def reset_if_requested(self) -> bool:
+        if not self.reset_requested.is_set():
+            return False
+        self.reset_requested.clear()
+        mujoco.mj_resetData(self.model, self.data)
+        self.spawned.clear()
+        self.placed.clear()
+        self.missed.clear()
+        self.mission = None
+        self.output_slot = 0
+        self.items = make_demo_items(self.seed, self.feed_interval_s, 1, (-0.15, 0.15), (1.15, 1.25))
+        for name in PART_NAMES:
+            park_part(self.data, self.qpos[name], PART_NAMES.index(name))
+        self.kin.command_joint_pose(self.kin.home_qpos, GRIP_OPEN_M, initialize_fingers=True)
+        self.kin.set_pad_adhesion(0.0)
+        self._update_belt()
+        mujoco.mj_forward(self.model, self.data)
+        print(f"[reset] single-arm seed={self.seed}")
+        return True
+
+    def set_paused(self, paused: bool) -> None:
+        self.paused = bool(paused)
+
+    def request_viewer_open(self) -> str:
+        return "focused" if self.viewer_active else "already_open"
+
+    def update_settings(self, values: dict[str, object]) -> None:
+        if "seed" in values:
+            self.seed = int(values["seed"])
+        if "belt_speed_mps" in values:
+            self.belt_speed_mps = max(0.01, float(values["belt_speed_mps"]))
+        if "feed_interval_s" in values:
+            self.feed_interval_s = max(0.5, float(values["feed_interval_s"]))
+        if "simulation_speed" in values:
+            self.simulation_speed = max(0.1, min(4.0, float(values["simulation_speed"])))
+        self.parameters.belt_speed_mps = self.belt_speed_mps
+        self.parameters.feed_interval_s = self.feed_interval_s
+        self.parameters.simulation_speed = self.simulation_speed
+        self.request_reset()
+
+    def snapshot(self) -> dict[str, object]:
+        mission = {}
+        if self.mission is not None:
+            frames = self.mission["frames"]
+            mission = {
+                "A": {
+                    "object_id": self.mission["object_id"],
+                    "stage": frames[int(self.mission["index"])][0],
+                    "placement_zone": "left_bin",
+                    "route": "single_arm",
+                    "tracking_updates": 0,
+                    "preparation_only": False,
+                }
+            }
+        return {
+            "seed": self.seed,
+            "mode": "single_arm",
+            "algorithm": {"id": "single_arm_executor", "name": "Single-Arm Conveyor Executor"},
+            "ik_solver": {"id": "qp_rrik", "name": "Box-Constrained QP Resolved-Rate IK"},
+            "time_s": round(float(self.data.time), 3),
+            "paused": self.paused,
+            "viewer": {"active": self.viewer_active, "launching": self.viewer_launching, "requested": False},
+            "parameters": asdict(self.parameters),
+            "performance": {"control_hz": 500.0, "tracking_ik_hz": 0.0, "safety_prediction_hz": 0.0, "max_viewer_substeps": 8},
+            "counts": {"spawned": len(self.spawned), "placed": len(self.placed), "missed": len(self.missed)},
+            "feedback": {"active_parts": len(self.spawned - self.placed - self.missed), "cycle_estimate_s": 0.0, "arms": {"A": {"attempts": 1 if self.mission else 0, "grasped": 1 if self.mission and self.mission["grasped"] else 0, "placed": len(self.placed), "cycle_s": 0.0}}},
+            "missions": mission,
+            "deferred": [],
+            "decision": {"assignments": [], "rejected": {}, "status": "single_arm"},
+            "preflight": {"status": "clear", "reason": "single_arm_workspace"},
+            "joint_plan": {"status": "single_arm"},
+            "safety": {"warning_margin_m": 0.10, "mode": "single_arm_physical_contacts"},
+            "events": [],
+        }
+
     def _update_belt(self) -> None:
-        travelled = (BELT_SPEED_MPS * self.data.time) % CONVEYOR_LOOP_LENGTH_M
+        travelled = (self.belt_speed_mps * self.data.time) % CONVEYOR_LOOP_LENGTH_M
         pitch = CONVEYOR_LOOP_LENGTH_M / SEGMENT_COUNT
         for index, (qpos_address, qvel_address) in enumerate(zip(self.segment_qpos, self.segment_qvel)):
             self.data.qpos[qpos_address] = UPSTREAM_CENTER_Y_M - ((index * pitch + travelled) % CONVEYOR_LOOP_LENGTH_M)
-            self.data.qvel[qvel_address] = -BELT_SPEED_MPS
+            self.data.qvel[qvel_address] = -self.belt_speed_mps
 
     def _predict(self, object_id: str, horizon: float) -> np.ndarray:
         xyz = self.data.qpos[self.qpos[object_id] : self.qpos[object_id] + 3].copy()
-        xyz[1] += -BELT_SPEED_MPS * horizon
+        xyz[1] += -self.belt_speed_mps * horizon
         return xyz
 
     def _plan(self, object_id: str) -> None:
@@ -136,9 +226,12 @@ class SingleArmDemo:
         elapsed = self.data.time - float(mission["stage_started"])
         ratio = min(1.0, max(0.0, elapsed / max(float(duration), CONTROL_STEP_S)))
         smooth = ratio * ratio * (3.0 - 2.0 * ratio)
-        current = self.data.qpos[self.kin.qpos_addresses].copy()
         commanded_opening = GRIP_OPEN_M * (1.0 - smooth) if stage == "close" else opening
-        commanded = current + (np.asarray(target) - np.asarray(mission["stage_start_q"]))*smooth
+        # Interpolate from the fixed stage-start pose.  Reusing the current
+        # pose here reapplies the same displacement every control tick and
+        # causes the visible creeping/wrist rotation.
+        stage_start = np.asarray(mission["stage_start_q"])
+        commanded = stage_start + (np.asarray(target) - stage_start) * smooth
         self.kin.command_joint_pose(commanded, commanded_opening)
         if stage == "close" and elapsed >= float(duration) and not mission["grasped"]:
             touching = self._touching_fingers(object_id)
@@ -190,21 +283,26 @@ class SingleArmDemo:
         self._update_mission()
         mujoco.mj_step(self.model, self.data)
 
-    def run(self, duration: float) -> None:
+    def run(self, duration: float, dashboard_url: str | None = None) -> None:
+        if dashboard_url:
+            webbrowser.open(dashboard_url)
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
             last = time.perf_counter()
             accumulated = 0.0
+            self.viewer_active = True
             while viewer.is_running() and self.data.time < duration:
+                self.reset_if_requested()
                 now = time.perf_counter()
-                accumulated += min(now - last, 0.05)
+                accumulated += min(now - last, 0.05) * self.simulation_speed
                 last = now
                 for _ in range(8):
-                    if accumulated < CONTROL_STEP_S:
+                    if self.paused or accumulated < CONTROL_STEP_S:
                         break
                     self.step()
                     accumulated -= CONTROL_STEP_S
                 viewer.sync()
                 time.sleep(0.001)
+            self.viewer_active = False
 
 
 def main() -> None:
@@ -212,7 +310,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--duration", type=float, default=60.0)
     args = parser.parse_args()
-    SingleArmDemo(args.seed).run(args.duration)
+    from demo_dashboard import start_dashboard
+
+    demo = SingleArmDemo(args.seed)
+    dashboard = start_dashboard(demo)
+    try:
+        demo.run(args.duration, dashboard.url)
+    finally:
+        dashboard.stop()
 
 
 if __name__ == "__main__":
