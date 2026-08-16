@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from central_coordinator import ArmId, ObjectClass
-from run_sorting_demo import SortingDemo, make_demo_items
+from run_sorting_demo import SAFETY_REGIONS, SortingDemo, make_demo_items
 
 
 class NarrowMiddleScenarioTests(unittest.TestCase):
@@ -73,10 +73,23 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
 
     def test_each_warning_box_expands_its_collision_box_by_10_cm(self):
         for arm in ArmId:
-            for region in ("upper_arm", "forearm", "gripper"):
+            for region in SAFETY_REGIONS:
                 collision = self.demo.model.geom(f"{arm.value}_{region}_collision").size
                 warning = self.demo.model.geom(f"{arm.value}_{region}_warning").size
                 np.testing.assert_allclose(warning - collision, (self.demo.parameters.warning_margin_m,) * 3)
+
+    def test_visual_meshes_do_not_define_physical_contact(self):
+        for arm in ArmId:
+            for link in range(2, 7):
+                geom = self.demo.model.geom(f"{arm.value}_Link{link}_visual")
+                self.assertEqual(geom.contype[0], 0)
+                self.assertEqual(geom.conaffinity[0], 0)
+
+    def test_parts_only_contact_station_surfaces_and_finger_pads(self):
+        for index in range(1, 11):
+            body = self.demo.model.body(f"part_{index:02d}")
+            geom_id = self.demo.model.body_geomadr[body.id]
+            self.assertEqual(self.demo.model.geom_conaffinity[geom_id], 1)
 
     def test_warning_margin_can_be_changed_without_resizing_physical_boxes(self):
         model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"

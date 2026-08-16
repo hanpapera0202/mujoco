@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import mujoco
+import numpy as np
 
 from central_coordinator import ArmId, Candidate, ObjectClass
 from run_sorting_demo import SortingDemo, place_part
@@ -59,6 +60,46 @@ class DynamicInterceptTests(unittest.TestCase):
         self.assertNotIn(ArmId.A, demo.missions)
         self.assertIn("part_01", demo.missed)
         self.assertEqual(demo.event_log[-1]["event"], "path_abort")
+
+    def test_joint_plan_rejects_an_unsafe_live_replan_before_contact(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        with redirect_stdout(StringIO()):
+            while demo.data.time < 12.0 and not demo.paused:
+                demo.step()
+        events = [event["event"] for event in demo.event_log]
+        self.assertIn("joint_plan", events)
+        self.assertNotIn("safety_stop", events)
+
+    def test_reachable_output_transfer_preserves_the_verified_pick_orientation(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        for arm, object_id, placement in (
+            (ArmId.A, "part_01", "left_bin"),
+            (ArmId.B, "part_02", "right_bin"),
+        ):
+            mission = demo._plan_mission(arm, object_id, placement)
+            targets = {stage: qpos for stage, _, qpos, _ in mission.keyframes}
+            kin = demo.kinematics[arm]
+            orientations = {}
+            for stage in ("close", "to_bin"):
+                demo.data.qpos[kin.qpos_addresses] = targets[stage]
+                mujoco.mj_forward(demo.model, demo.data)
+                orientations[stage] = demo.data.site_xmat[kin.grasp_site_id].reshape(3, 3).copy()
+            self.assertLess(np.linalg.norm(orientations["to_bin"] - orientations["close"]), 0.05)
+            np.testing.assert_allclose(targets["lower"], targets["to_bin"])
+
+    def test_tail_exit_during_close_releases_the_stale_assignment(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        mission = demo._plan_mission(ArmId.A, "part_01", "left_bin")
+        mission.keyframe_index = 3  # close
+        mission.keyframe_started_s = demo.data.time
+        mission.stage_start_qpos = demo.data.qpos[demo.kinematics[ArmId.A].qpos_addresses].copy()
+        demo.missions[ArmId.A] = mission
+        demo.data.qpos[demo.qpos_addresses["part_01"] + 1] = -3.0
+        mujoco.mj_forward(demo.model, demo.data)
+        with redirect_stdout(StringIO()):
+            demo._update_missions()
+        self.assertIn("part_01", demo.missed)
+        self.assertTrue(mission.failed)
 
     def test_deferred_peer_reaches_safe_standby_without_marking_missed(self):
         demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)

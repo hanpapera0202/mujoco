@@ -9,7 +9,7 @@ Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版
 - 30 秒滾動規劃視窗，兩台平權手臂每次最多各有一個未完成預約。
 - 固定 seed 的 10 件物體全部是 `MIDDLE`，不再先貼 LEFT / RIGHT 標籤。
 - 中央端以可達性、期限、成功率、路徑成本與歷史負載選擇 A 或 B；真正完全同分時首輪 A 優先。
-- 每臂以上臂、前臂、夾爪三個長方體建模；雙臂同時活動時，以盒體各面外擴 10 cm 的領域預警。
+- 每臂以上臂、前臂、三段腕部與夾爪六個長方體建模；視覺 mesh 不參與碰撞，雙臂同時活動時以盒體各面外擴 10 cm 的領域預警。
 - 固定環境碰撞會立即撤銷候選並重新匹配；雙臂領域衝突則保留預約等待安全窗口。
 
 ## 執行
@@ -37,7 +37,7 @@ Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版
 & .\.venv\Scripts\python.exe src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
 
-目前基準版本：`0.24.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。最近一次 100-seed 物理驗證與改進方向記錄於 [dual_arm_validation_20260816_zh.md](docs/dual_arm_validation_20260816_zh.md)。
+目前基準版本：`0.25.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。最近一次 100-seed 物理驗證與改進方向記錄於 [dual_arm_validation_20260816_zh.md](docs/dual_arm_validation_20260816_zh.md)，本次抓取與碰撞建模驗證見 [v0.25_validation_zh.md](docs/v0.25_validation_zh.md)。
 
 基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
 

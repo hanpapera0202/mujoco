@@ -51,6 +51,15 @@ TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
 SAFETY_CHECK_PERIOD_S = 0.02
 MAX_VIEWER_SUBSTEPS = 8
+JOINT_RESERVATION_HOLD_S = 12.0
+SAFETY_REGIONS = (
+    "upper_arm",
+    "forearm",
+    "wrist_pitch",
+    "wrist_yaw",
+    "flange",
+    "gripper",
+)
 # The validated moving-target executor now runs under the centralized
 # two-arm coordinator.  Joint trajectory preflight decides whether both arms
 # can move in parallel for each batch.
@@ -74,6 +83,7 @@ GRASP_Z_TOLERANCE_M = 0.060
 GRASP_ORIENTATION_TOLERANCE = 0.16
 GRIP_OPEN_M = 0.035
 GRIP_CLOSED_M = 0.0
+GRIP_HOLD_ADHESION_N = 20.0
 # The grasp-zone site is centred between the two finger pads.  Dynamic belt
 # prediction therefore targets the measured part centre directly.
 GRASP_ALIGNMENT_OFFSET_M = {
@@ -428,7 +438,7 @@ class SortingDemo:
         self.warning_envelope_ids = {
             arm: tuple(
                 mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_warning")
-                for region in ("upper_arm", "forearm", "gripper")
+                for region in SAFETY_REGIONS
             )
             for arm in ArmId
         }
@@ -688,13 +698,13 @@ class SortingDemo:
         """Resize visual warning boxes without changing physical collision geometry."""
         margin = self.parameters.warning_margin_m
         for arm in ArmId:
-            for region in ("upper_arm", "forearm", "gripper"):
+            for region in SAFETY_REGIONS:
                 collision_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_collision")
                 warning_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_warning")
                 self.model.geom_size[warning_id] = self.model.geom_size[collision_id] + margin
 
     def _warning_envelope_overlaps(self, data: mujoco.MjData) -> list[tuple[str, str]]:
-        """Detect A/B overlap using three expanded safety boxes per arm."""
+        """Detect A/B overlap using expanded boxes covering every arm segment."""
         overlaps: list[tuple[str, str]] = []
         for first_id in self.warning_envelope_ids[ArmId.A]:
             for second_id in self.warning_envelope_ids[ArmId.B]:
@@ -794,16 +804,25 @@ class SortingDemo:
             ArmId.A: np.array((-2.1728, -0.2902, -1.8000, 2.5770, 4.0202, -6.1516)),
             ArmId.B: np.array((3.3961, 1.7425, -1.3483, 0.0000, 1.9187, 0.0000)),
         }[mission.arm]
-        for name, duration_scale, escape_duration in (
-            ("direct", 1.00, 0.0),
-            ("balanced", 1.12, 2.4),
-            ("outer", 1.28, 3.2),
+        for name, duration_scale, escape_duration, reservation_hold in (
+            ("direct", 1.00, 0.0, 0.0),
+            # The yielding arm still moves to its high approach waypoint at
+            # the same time as its peer.  It only reserves the shared lower
+            # corridor while the peer descends, so the 3x3 game contains
+            # genuinely concurrent but time-separated candidates.
+            ("reserved", 1.00, 0.0, JOINT_RESERVATION_HOLD_S),
+            ("outer", 1.28, 3.2, 0.0),
         ):
             candidate = copy.deepcopy(mission)
             candidate.route_variant = name
             task_frames = [(stage, duration * duration_scale, qpos.copy(), opening) for stage, duration, qpos, opening in mission.keyframes]
             if escape_duration:
                 task_frames.insert(0, (f"{name}_escape", escape_duration, escape_qpos.copy(), GRIP_OPEN_M))
+            if reservation_hold:
+                task_frames.insert(
+                    1,
+                    ("shared_corridor_hold", reservation_hold, task_frames[0][2].copy(), GRIP_OPEN_M),
+                )
             candidate.keyframes = task_frames
             candidate.keyframe_index = 0
             candidate.keyframe_started_s = float(self.data.time)
@@ -813,7 +832,12 @@ class SortingDemo:
         return variants
 
     def _joint_evidence(self, first: ArmMission, second: ArmMission) -> JointStrategyEvidence:
-        safe, reason = self._preflight_joint_pair(first, second)
+        # Contact geometry is a hard safety constraint.  The 10 cm envelopes
+        # are deliberately a continuous coordination cost: they warn the
+        # centralized planner away from a close pass without pretending that
+        # two non-contacting arms have already collided.
+        safe, reason = self._preflight_joint_pair(first, second, enforce_warning=False)
+        warning_overlap_ratio = self._joint_warning_overlap_ratio(first, second)
         start_s = min(first.trajectory[0][0], second.trajectory[0][0])
         end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
         times = np.arange(start_s, end_s + 0.001, 0.10)
@@ -846,7 +870,26 @@ class SortingDemo:
             grasp_probability_a=grasp[ArmId.A],
             grasp_probability_b=grasp[ArmId.B],
             rejection_reason="" if safe else reason,
+            warning_overlap_ratio=warning_overlap_ratio,
         )
+
+    def _joint_warning_overlap_ratio(self, first: ArmMission, second: ArmMission) -> float:
+        """Measure how much of a physically clear joint path enters warning space."""
+        trial = mujoco.MjData(self.model)
+        start_s = min(first.trajectory[0][0], second.trajectory[0][0])
+        end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
+        samples = np.arange(start_s, end_s + 0.001, 0.10)
+        overlaps = 0
+        for at_s in samples:
+            trial.qpos[:] = self.data.qpos
+            for mission in (first, second):
+                qpos, opening = self._mission_pose_at(mission, float(at_s))
+                kin = self.kinematics[mission.arm]
+                trial.qpos[kin.qpos_addresses] = qpos
+                trial.qpos[kin.finger_qpos_addresses] = opening
+            mujoco.mj_forward(self.model, trial)
+            overlaps += bool(self._warning_envelope_overlaps(trial))
+        return overlaps / max(1, len(samples))
 
     def _pose_is_safe(
         self,
@@ -854,6 +897,7 @@ class SortingDemo:
         qpos: np.ndarray,
         gripper_opening: float | None = None,
         enforce_warning: bool = False,
+        reserve_peer_command: bool = False,
     ) -> bool:
         """Check immediate physical safety; warning envelopes are admission constraints.
 
@@ -868,6 +912,16 @@ class SortingDemo:
         trial.qpos[kin.qpos_addresses] = qpos
         if gripper_opening is not None:
             trial.qpos[kin.finger_qpos_addresses] = gripper_opening
+        if reserve_peer_command:
+            # Both controllers issue a target before the next MuJoCo step.
+            # Testing only ``data.qpos`` lets two individually safe commands
+            # enter the same volume together. Reserve the peer's most recent
+            # actuator target as a one-control-step centralized horizon.
+            for other_arm, other_kin in self.kinematics.items():
+                if other_arm is arm or other_arm not in self.missions:
+                    continue
+                if other_kin.last_commanded_qpos is not None:
+                    trial.qpos[other_kin.qpos_addresses] = other_kin.last_commanded_qpos
         mujoco.mj_forward(self.model, trial)
         if self._forbidden_contacts(trial):
             return False
@@ -1008,7 +1062,11 @@ class SortingDemo:
         self.output_offsets[placement_zone] += 1
         # Six separated tray slots.  The old 10 x 8 cm pattern let settling
         # parts overlap the next lowering path and knock a held part loose.
-        drop[:2] += np.array(((column - 0.5) * 0.16, (row - 1.0) * 0.14))
+        # Mirror the slot columns so the first slot of each tray lies inside
+        # that arm's validated carry workspace rather than beyond its outer
+        # reach boundary.
+        x_direction = -1.0 if placement_zone == "left_bin" else 1.0
+        drop[:2] += np.array((x_direction * (column - 0.5) * 0.16, (row - 1.0) * 0.14))
         drop[2] = BIN_DROP_HEIGHT_M
         bin_approach = drop.copy()
         bin_approach[2] = BIN_APPROACH_HEIGHT_M
@@ -1017,8 +1075,26 @@ class SortingDemo:
         q_prepare = kin.solve_position_ik(prepare_xyz, q_home)
         q_pregrasp = kin.solve_position_ik(pregrasp, q_prepare)
         q_pick = kin.solve_position_ik(pick_xyz, q_pregrasp)
-        q_bin_approach = kin.solve_position_ik(bin_approach, q_pregrasp, target_xmat=GENERAL_XMAT)
-        q_drop = kin.solve_position_ik(drop, q_bin_approach, target_xmat=GENERAL_XMAT)
+        # A grasped part is a physical payload, not a kinematic attachment.
+        # The position IK may have a small unavoidable orientation residual at
+        # the pick pose.  Preserve that *reachable measured* orientation for
+        # transport instead of forcing either an ideal frame or GENERAL_XMAT,
+        # both of which can make the wrist roll the payload out of the pinch.
+        saved_qpos = self.data.qpos.copy()
+        self.data.qpos[kin.qpos_addresses] = q_pick
+        mujoco.mj_forward(self.model, self.data)
+        carry_xmat = self.data.site_xmat[kin.grasp_site_id].reshape(3, 3).copy()
+        self.data.qpos[:] = saved_qpos
+        mujoco.mj_forward(self.model, self.data)
+        # The carry pose sits in a different IK basin from the near-belt pick
+        # pose.  Starting its batch solve from the known collision-screened
+        # home branch avoids a joint-limit local minimum; the complete sweep
+        # is still screened before the central planner accepts it.
+        q_bin_approach = kin.solve_position_ik(bin_approach, kin.home_qpos, target_xmat=carry_xmat)
+        # The tray floor lies below the wrist's collision-free orientation
+        # workspace. Release from the reachable approach height and let the
+        # free body settle under gravity rather than forcing a wrist flip.
+        q_drop = q_bin_approach.copy()
         keyframes = [
                 ("prepare", prepare_s, q_prepare, GRIP_OPEN_M),
                 ("track", track_s, q_pregrasp, GRIP_OPEN_M),
@@ -1098,19 +1174,34 @@ class SortingDemo:
             mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes[mission.keyframe_index :])
             return
         q_pregrasp, q_pick, _ = candidates[0]
-        mission.path_blocked_since_s = None
-        for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
+        updated = copy.deepcopy(mission)
+        for index, (stage, duration, target, opening) in enumerate(updated.keyframes):
             if stage == "prepare" and index == mission.keyframe_index:
                 prepare_xyz = self._overhead_approach(mission.arm)
                 q_prepare = kin.solve_resolved_rate_ik(prepare_xyz, start, max_iterations=TRACKING_IK_MAX_ITERATIONS)
-                mission.keyframes[index] = (stage, duration, q_prepare, opening)
+                updated.keyframes[index] = (stage, duration, q_prepare, opening)
             elif stage == "track":
-                mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
+                updated.keyframes[index] = (stage, duration, q_pregrasp, opening)
             elif stage in ("descend", "close"):
-                mission.keyframes[index] = (stage, duration, q_pick, opening)
+                updated.keyframes[index] = (stage, duration, q_pick, opening)
             elif stage == "lift":
-                mission.keyframes[index] = (stage, duration, q_pregrasp, opening)
-        mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes[mission.keyframe_index :])
+                updated.keyframes[index] = (stage, duration, q_pregrasp, opening)
+        updated.trajectory = self._build_trajectory(updated.arm, updated.keyframes)
+        if mission.joint_strategy is not None:
+            jointly_safe, reason = self._preflight_mission(updated, enforce_warning=False)
+            if not jointly_safe:
+                mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+                mission.keyframe_started_s += TRACKING_IK_PERIOD_S
+                self._log(
+                    "joint_replan_reject",
+                    object_id=mission.object_id,
+                    arm=mission.arm.value,
+                    reason=reason,
+                )
+                return
+        mission.path_blocked_since_s = None
+        mission.keyframes = updated.keyframes
+        mission.trajectory = updated.trajectory
         mission.last_pick_xyz = pick_xyz.copy()
         mission.tracking_updates += 1
         mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
@@ -1650,6 +1741,10 @@ class SortingDemo:
             # the belt, so hold the close stage open until the measured pose
             # and the velocity-predicted pose both enter the grasp window.
             if stage == "close" and not self._grasp_window_ready(arm, mission.object_id):
+                part_y = float(self.data.qpos[self.qpos_addresses[mission.object_id] + 1])
+                if part_y < TAIL_EXIT_Y_M:
+                    self._fail_grasp(arm, mission, "tail_exit_before_grasp", set())
+                    continue
                 kin.command_joint_pose(target, GRIP_OPEN_M)
                 mission.keyframe_started_s += CONTROL_STEP_S
                 if self.data.time - mission.last_safety_hold_s >= 0.5:
@@ -1677,7 +1772,13 @@ class SortingDemo:
             safety_check_due = self.data.time >= mission.next_safety_check_s
             if safety_check_due:
                 mission.next_safety_check_s = self.data.time + SAFETY_CHECK_PERIOD_S
-            if require_clearance and safety_check_due and not self._pose_is_safe(arm, current, commanded_opening, handoff_warning_guard):
+            if require_clearance and safety_check_due and not self._pose_is_safe(
+                arm,
+                current,
+                commanded_opening,
+                handoff_warning_guard,
+                reserve_peer_command=True,
+            ):
                 if mission.last_safe_qpos is not None:
                     kin.command_joint_pose(mission.last_safe_qpos, commanded_opening)
                 mission.keyframe_started_s += CONTROL_STEP_S
@@ -1685,7 +1786,13 @@ class SortingDemo:
                 continue
             stage_start = mission.stage_start_qpos if mission.stage_start_qpos is not None else current
             commanded_qpos = interpolate(stage_start, target, smoothstep(elapsed / max(duration, CONTROL_STEP_S)))
-            if require_clearance and safety_check_due and not self._pose_is_safe(arm, commanded_qpos, commanded_opening, handoff_warning_guard):
+            if require_clearance and safety_check_due and not self._pose_is_safe(
+                arm,
+                commanded_qpos,
+                commanded_opening,
+                handoff_warning_guard,
+                reserve_peer_command=True,
+            ):
                 mission.keyframe_started_s += CONTROL_STEP_S
                 mission.next_safety_check_s = self.data.time + CONTROL_STEP_S
                 if self.data.time - mission.last_safety_hold_s >= 0.5:
@@ -1703,15 +1810,20 @@ class SortingDemo:
             if stage == "close" and stage_reached and not mission.grasped:
                 if not self._confirm_grasp(arm, mission):
                     continue
-                kin.set_pad_adhesion(20.0)
+                # Adhesion is enabled only after bilateral MuJoCo contact has
+                # been verified.  It remains a force-based free-body grasp,
+                # rather than directly writing the part pose or adding a
+                # kinematic teleport constraint.
+                kin.set_pad_adhesion(GRIP_HOLD_ADHESION_N)
             if not stage_reached:
                 continue
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
-            # Preserve the previous actuator target across a stage boundary.
-            # Starting the next interpolation from the lagging measured pose
-            # would briefly unload the servo and make the wrist dip.
-            mission.stage_start_qpos = target.copy()
+            # A target is only a request to MuJoCo's actuators. Starting the
+            # next segment from that request while the real arm still lags
+            # causes a discontinuous catch-up jump, which can cut across the
+            # peer arm's reserved corridor. Always continue from measurement.
+            mission.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
             if mission.preparation_only and mission.done:
                 mission.preparation_complete = True
                 mission.keyframe_index = len(mission.keyframes) - 1
@@ -1896,8 +2008,17 @@ class SortingDemo:
             mission = self.missions.pop(arm, None)
             if mission is None:
                 continue
-            self.kinematics[arm].command_joint_pose(self.kinematics[arm].home_qpos, GRIP_OPEN_M)
-            self.kinematics[arm].set_pad_adhesion(0.0)
+            kin = self.kinematics[arm]
+            # A controller target alone leaves the current penetration in the
+            # state vector until physics can resolve it.  Directly restore a
+            # screened home state before the final forward pass so recovery
+            # cannot become a permanent GUI pause.
+            self.data.qpos[kin.qpos_addresses] = kin.home_qpos
+            self.data.qvel[kin.dof_addresses] = 0.0
+            self.data.qpos[kin.finger_qpos_addresses] = GRIP_OPEN_M
+            self.data.qvel[kin.finger_dof_addresses] = 0.0
+            kin.command_joint_pose(kin.home_qpos, GRIP_OPEN_M)
+            kin.set_pad_adhesion(0.0)
             self.missed.add(mission.object_id)
             self.coordinator.mark_completed(mission.object_id)
             self._log("safety_recover", object_id=mission.object_id, arm=arm.value, reason="abort_and_retract", contact=contacts[0])

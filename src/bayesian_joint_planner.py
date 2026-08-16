@@ -32,6 +32,7 @@ class JointStrategyEvidence:
     grasp_probability_a: float
     grasp_probability_b: float
     rejection_reason: str = ""
+    warning_overlap_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class BayesianJointGame:
             + 30.0 * evidence.simultaneous_ratio
             - 0.25 * evidence.path_length_rad
             - 400.0 * collision_probability
+            - 180.0 * evidence.warning_overlap_ratio
         )
         return JointStrategyScore(evidence, completion_probability, collision_probability, expected_utility)
 
@@ -81,4 +83,3 @@ class BayesianJointGame:
 
     def update(self, route_a: str, route_b: str, success: bool) -> None:
         self.belief_for(route_a, route_b).update(success)
-
