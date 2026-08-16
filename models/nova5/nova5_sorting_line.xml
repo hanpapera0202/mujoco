@@ -63,8 +63,10 @@
     <body name="conveyor_frame" pos="0 0.10 0">
       <geom name="conveyor_safety_underlay" type="box" pos="0 0 0.022" size="0.230 2.53 0.022" material="belt_mat" contype="1" conaffinity="56" friction="0.8 0.02 0.001"/>
       <!-- Low guide rails leave a top-entry opening for the physical gripper. -->
-      <geom name="conveyor_left_guard" type="box" pos="-0.248 0 0.075" size="0.018 2.62 0.045" material="guard_mat" contype="1" conaffinity="24"/>
-      <geom name="conveyor_right_guard" type="box" pos="0.248 0 0.075" size="0.018 2.62 0.045" material="guard_mat" contype="1" conaffinity="24"/>
+      <!-- Rails sit outside the 45 cm belt surface. This preserves physical
+           containment without stealing the gripper's edge-pick clearance. -->
+      <geom name="conveyor_left_guard" type="box" pos="-0.360 0 0.075" size="0.018 2.62 0.045" material="guard_mat" contype="1" conaffinity="24"/>
+      <geom name="conveyor_right_guard" type="box" pos="0.360 0 0.075" size="0.018 2.62 0.045" material="guard_mat" contype="1" conaffinity="24"/>
       <site name="vision_pick_window" pos="0 0 0.135" size="0.210 1.85 0.003" rgba="0 0 0 0"/>
       <site name="infeed_part_present" pos="0 2.15 0.135" size="0.205 0.08 0.004" rgba="0 0 0 0"/>
       <site name="tail_exit_sensor" pos="0 -2.35 0.135" size="0.205 0.08 0.004" rgba="0 0 0 0"/>
