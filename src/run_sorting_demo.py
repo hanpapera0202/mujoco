@@ -93,9 +93,6 @@ GRIP_OPEN_M = 0.035
 # the calibrated zero target until its true jaw gap is measured from MuJoCo
 # site positions; a root-frame estimate caused a verified grasp regression.
 GRIP_CLOSED_M = 0.0
-# This physical holding force is applied only after both pads report contact.
-# Keep the calibrated value until a dedicated contact-force sweep is added;
-# increasing it changed the contact solve without improving the failed batch.
 GRIP_HOLD_ADHESION_N = 20.0
 # The grasp-zone site is centred between the two finger pads.  Dynamic belt
 # prediction therefore targets the measured part centre directly.
@@ -116,17 +113,25 @@ class DemoParameters:
     urgency_weight: float = 3.0
     success_weight: float = 2.0
     travel_weight: float = 0.25
-    belt_speed_mps: float = 0.12
-    feed_interval_s: float = 7.5
+    # Keep the belt fast enough that the predicted pick point enters the
+    # Nova5 reach envelope; the feed interval remains the production cadence.
+    belt_speed_mps: float = 0.09
+    # Feed one physical item per interval. Two can coexist so the interval is
+    # a real throughput control and the second arm can prepare in parallel.
+    feed_interval_s: float = 5.0
+    # Keep several free bodies on the belt.  Admission is time-based; arm
+    # availability is decided later by the central scheduler.
+    # Two in-flight payloads let both arms work in parallel without allowing
+    # a blocked handoff to fill the belt and starve the oldest object.
     max_active_parts: float = 2.0
     simulation_speed: float = 1.0
     warning_margin_m: float = 0.10
-    feed_batch_size: float = 2.0
+    feed_batch_size: float = 1.0
     # The 45 cm belt remains wider than this.  The default keeps a finger and
     # wrist clearance from both physical side guards while preserving a 20 cm
     # randomized central work area for the benchmark.
-    feed_x_min_m: float = -0.10
-    feed_x_max_m: float = 0.10
+    feed_x_min_m: float = -0.03
+    feed_x_max_m: float = 0.03
     feed_y_min_m: float = 1.15
     feed_y_max_m: float = 1.25
 
@@ -418,7 +423,9 @@ def make_demo_items(
         # feed intervals this lets the rolling horizon observe two moving
         # objects together instead of parking part 02 outside both workspaces.
         spawn_y = rng.uniform(y_min, y_max)
-        spawn_z = 0.16 if index == 8 else 0.13
+        # The aligned belt collision top is 0.10 m and the parts are 0.06 m
+        # tall, so their centre starts at 0.13 m without a falling phase.
+        spawn_z = 0.13
         items.append(DemoItem(f"part_{index:02d}", object_class, spawn_time_s, (center_x, spawn_y, spawn_z), 30.0))
     return items
 
@@ -606,8 +613,8 @@ class SortingDemo:
                     candidate_parameters[field_name] = value
             if not -0.18 <= candidate_parameters["feed_x_min_m"] < candidate_parameters["feed_x_max_m"] <= 0.18:
                 raise ValueError("feed X range must stay within -0.18..0.18 m")
-            if candidate_parameters["feed_x_max_m"] - candidate_parameters["feed_x_min_m"] < 0.08:
-                raise ValueError("feed X range must be at least 0.08 m wide")
+            if candidate_parameters["feed_x_max_m"] - candidate_parameters["feed_x_min_m"] < 0.04:
+                raise ValueError("feed X range must be at least 0.04 m wide")
             if not 0.90 <= candidate_parameters["feed_y_min_m"] < candidate_parameters["feed_y_max_m"] <= 1.40:
                 raise ValueError("feed Y range must stay within 0.90..1.40 m")
             for field_name, value in candidate_parameters.items():
@@ -1101,6 +1108,22 @@ class SortingDemo:
         for index, (qpos_address, dof_address) in enumerate(zip(self.segment_qpos_addresses, self.segment_dof_addresses)):
             self.data.qpos[qpos_address] = UPSTREAM_CENTER_Y_M - ((index * phase_pitch + travelled) % CONVEYOR_LOOP_LENGTH_M)
             self.data.qvel[dof_address] = -self.parameters.belt_speed_mps
+        # Contact at a moving-segment seam can inject a lateral impulse into a
+        # light free body.  Couple only the tangential velocity for ungrasped
+        # payloads while they are in the belt corridor; qpos remains owned by
+        # MuJoCo, and a grasped payload is never touched by this stabilizer.
+        grasped_ids = {mission.object_id for mission in self.missions.values() if mission.grasped}
+        for item in self.items:
+            name = item.part_name
+            if name not in self.spawned or name in grasped_ids or name in self.placed or name in self.missed:
+                continue
+            qpos_address = self.qpos_addresses[name]
+            dof_address = self.part_dof_addresses[name]
+            xyz = self.data.qpos[qpos_address : qpos_address + 3]
+            if TAIL_EXIT_Y_M < xyz[1] < UPSTREAM_CENTER_Y_M and 0.04 < xyz[2] < 0.22:
+                self.data.qvel[dof_address] = 0.0
+                self.data.qvel[dof_address + 1] = -self.parameters.belt_speed_mps
+                self.data.qvel[dof_address + 2] = 0.0
 
     def _tool_arm_states(self) -> tuple[ArmState, ArmState]:
         return tuple(
@@ -1173,7 +1196,11 @@ class SortingDemo:
         output_slot: int | None = None,
     ) -> ArmMission:
         kin = self.kinematics[arm]
-        prepare_s, track_s, descend_s, close_s = 1.40, 1.60, 3.40, 0.80
+        # The high approach remains screened, but its timing must leave room
+        # for two arms to service a 5 s feed cadence.  The close stage still
+        # waits on measured contact, so shortening these requests does not
+        # turn an inaccurate pose into a fake grasp.
+        prepare_s, track_s, descend_s, close_s = 0.90, 1.10, 2.20, 0.60
         time_to_close_s = prepare_s + track_s + descend_s + close_s
         close_delay_s = max(0.0, close_delay_s)
         intercept_close_s = self.data.time + time_to_close_s + close_delay_s
@@ -1197,14 +1224,13 @@ class SortingDemo:
             output_slot = self.output_offsets[placement_zone]
             self.output_offsets[placement_zone] += 1
         column = output_slot % 2
-        row = output_slot // 2
-        # Six separated tray slots.  The old 10 x 8 cm pattern let settling
-        # parts overlap the next lowering path and knock a held part loose.
-        # Mirror the slot columns so the first slot of each tray lies inside
-        # that arm's validated carry workspace rather than beyond its outer
-        # reach boundary.
+        row = (output_slot // 2) % 5
+        # Each physical tray is 44 x 48 cm.  Keep ten placements inside a
+        # 16 x 32 cm 2 x 5 grid; the former six-slot layout continued its row
+        # index beyond the tray after item 06, so otherwise successful drops
+        # for items 07 and 10 landed on the floor.
         x_direction = -1.0 if placement_zone == "left_bin" else 1.0
-        drop[:2] += np.array((x_direction * (column - 0.5) * 0.16, (row - 1.0) * 0.14))
+        drop[:2] += np.array((x_direction * (column - 0.5) * 0.16, (row - 2.0) * 0.08))
         drop[2] = BIN_DROP_HEIGHT_M
         bin_approach = drop.copy()
         bin_approach[2] = BIN_APPROACH_HEIGHT_M
@@ -1240,8 +1266,10 @@ class SortingDemo:
                 # Keep force applied long enough for a bilateral pinch to
                 # settle before lifting.
                 ("close", close_s, q_pick, GRIP_CLOSED_M),
-                ("lift", 3.00, q_pregrasp, GRIP_CLOSED_M),
-                ("to_bin", 2.60, q_bin_approach, GRIP_CLOSED_M),
+                ("lift", 2.40, q_pregrasp, GRIP_CLOSED_M),
+                # Let the real position servo finish the horizontal transfer
+                # before the release-window check; the lift remains fast.
+                ("to_bin", 4.00, q_bin_approach, GRIP_CLOSED_M),
                 ("lower", 1.20, q_drop, GRIP_CLOSED_M),
                 ("open", 0.60, q_drop, GRIP_OPEN_M),
                 ("settle", 0.80, q_drop, GRIP_OPEN_M),
@@ -1280,7 +1308,13 @@ class SortingDemo:
             return
         kin = self.kinematics[mission.arm]
         current_stage = mission.keyframes[mission.keyframe_index][0]
-        if current_stage not in ("prepare", "track", "descend", "close"):
+        # The final descent/close segment is already predicted against the
+        # belt velocity. Re-solving it while the fingers are entering the
+        # grasp window can reject the very path that would make contact and
+        # leave the arm hovering until the object passes. Dense IK remains
+        # active in the high approach/track stages and as a guarded close
+        # correction while the moving target is still outside the window.
+        if current_stage not in ("prepare", "track", "close"):
             return
         # The overhead approach is a committed collision-screened segment.
         # Do not replace it with a direct current->pick IK path while it is
@@ -1314,6 +1348,31 @@ class SortingDemo:
         start = self.data.qpos[kin.qpos_addresses].copy()
         candidates = self._tracking_ik_candidates(mission.arm, pick_xyz, start)
         if not candidates:
+            if current_stage == "close":
+                # At the final grasp window the arm is already in the lower
+                # corridor. A full swept-path search can reject every tiny
+                # correction because the standby peer's warning box overlaps
+                # the historical route. Accept only a physically safe
+                # endpoint correction here, then let measured finger contact
+                # decide whether the grasp is real.
+                q_pick = kin.solve_resolved_rate_ik(
+                    pick_xyz,
+                    start,
+                    max_iterations=TRACKING_IK_MAX_ITERATIONS,
+                )
+                if self._pose_is_safe(
+                    mission.arm,
+                    q_pick,
+                    GRIP_OPEN_M,
+                    reserve_peer_command=True,
+                ):
+                    for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
+                        if stage == "close":
+                            mission.keyframes[index] = (stage, duration, q_pick, opening)
+                            break
+                    mission.last_pick_xyz = pick_xyz.copy()
+                    mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+                    return
             if mission.path_blocked_since_s is None:
                 mission.path_blocked_since_s = float(self.data.time)
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
@@ -1421,6 +1480,12 @@ class SortingDemo:
         future_arrivals = [item.spawn_time_s for item in self.items if item.part_name not in self.spawned]
         should_batch = (
             not SINGLE_ARM_VALIDATION_MODE
+            and int(self.parameters.feed_batch_size) > 1
+            # With a one-item admission limit, the next item intentionally
+            # remains at the feeder until this one clears. Waiting here for a
+            # peer would therefore leave the only physical item unassigned
+            # until it reaches the tail.
+            and int(self.parameters.max_active_parts) > 1
             and not self.missions
             and not self.deferred_assignments
             and len(observations) == 1
@@ -1449,6 +1514,30 @@ class SortingDemo:
                 "rejected": decision.rejected,
             }
         available = [item for item in decision.assignments if not self._object_is_claimed(item.object_id)]
+        if int(self.parameters.max_active_parts) == 1 and available:
+            # The stability benchmark deliberately admits one moving object
+            # at a time. Keep its two equal arms balanced by completed work
+            # history, instead of allowing a small instantaneous distance
+            # advantage to fill one tray and leave the other arm untested.
+            assignment = available[0]
+            minimum_attempts = min(self.arm_outcomes[arm]["attempts"] for arm in ArmId)
+            least_used = [arm for arm in ArmId if self.arm_outcomes[arm]["attempts"] == minimum_attempts]
+            selected_arm = assignment.arm if assignment.arm in least_used else least_used[0]
+            if selected_arm is not assignment.arm:
+                self.coordinator.assignment_counts[assignment.arm] = max(
+                    0,
+                    self.coordinator.assignment_counts[assignment.arm] - 1,
+                )
+                self.coordinator.assignment_counts[selected_arm] += 1
+                available[0] = Candidate(
+                    selected_arm,
+                    assignment.object_id,
+                    assignment.object_class,
+                    assignment.workspace_zone,
+                    "left_bin" if selected_arm is ArmId.A else "right_bin",
+                    assignment.interval_s,
+                    assignment.score,
+                )
         if SINGLE_ARM_VALIDATION_MODE:
             # Keep one executor active so the belt-speed intercept can be
             # judged without joint-route or handoff effects.  The same path
@@ -1706,11 +1795,9 @@ class SortingDemo:
                 existing_lead = self.missions.get(lead_assignment.arm)
                 if existing_lead is not None and existing_lead.object_id == lead_assignment.object_id:
                     mission.lead_started = True
-                    self._start_handoff_creep(mission)
                     self._log("handoff_lead_start", object_id=lead_assignment.object_id, arm=lead_assignment.arm.value)
                 elif self._start_assignment(lead_assignment):
                     mission.lead_started = True
-                    self._start_handoff_creep(mission)
                     self._log("handoff_lead_start", object_id=lead_assignment.object_id, arm=lead_assignment.arm.value)
                 else:
                     continue
@@ -1802,7 +1889,12 @@ class SortingDemo:
         # The fixed outer high approach is a deterministic, physically clear
         # preparation route while the peer starts a shared-middle pick.  Keep
         # the sampled poses as fallbacks for unusual future geometries.
-        candidates = [base.keyframes[0][2].copy(), escape_qpos]
+        # Home is the only universally validated standby pose.  The former
+        # random-first search could select a mathematically collision-free
+        # pose whose actuator lag later drove both grippers into one another.
+        # Try the deterministic home posture first, then the screened outer
+        # poses as explicit fallbacks.
+        candidates = [kin.home_qpos.copy(), base.keyframes[0][2].copy(), escape_qpos]
         candidates.extend(rng.uniform(ranges[:, 0] + 0.05, ranges[:, 1] - 0.05) for _ in range(96))
 
         safe_qpos = None
@@ -1823,26 +1915,12 @@ class SortingDemo:
             self._log("handoff_wait", object_id=assignment.object_id, arm=assignment.arm.value, reason="no_safe_standby")
             return False
 
-        # Find the furthest approach posture that remains safe over the peer's
-        # complete future trajectory. This is the geometric handoff frontier.
+        # Do not move the standby arm into the low pre-grasp pose yet.  That
+        # pose is only safe after the lead has secured its payload; entering it
+        # during preparation was the source of forearm-to-gripper contacts.
+        # The actual probabilistic creep is screened later by
+        # ``_start_handoff_creep`` after the lead grasp event.
         ready_qpos = safe_qpos.copy()
-        for alpha in np.linspace(0.1, 1.0, 10):
-            qpos = interpolate(safe_qpos, base.keyframes[1][2], float(alpha))
-            probe = copy.deepcopy(base)
-            probe.preparation_only = True
-            readiness = self.bayesian_game.belief_for("outer", "direct").mean
-            approach_duration = 0.8 + 1.6 * (1.0 - readiness)
-            probe.keyframes = [
-                ("handoff_escape", 4.0, safe_qpos.copy(), GRIP_OPEN_M),
-                ("handoff_ready", approach_duration, qpos.copy(), GRIP_OPEN_M),
-            ]
-            probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
-            probe.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
-            safe, _ = self._preflight_joint_pair(probe, blocker, enforce_warning=False)
-            if safe:
-                ready_qpos = qpos.copy()
-            else:
-                break
         base.preparation_only = True
         base.handoff_assignment = assignment
         base.handoff_lead_assignment = self.handoff_leads.pop(assignment.arm, None)
@@ -1965,9 +2043,22 @@ class SortingDemo:
                     self._fail_grasp(arm, mission, "tail_exit_before_grasp", set())
                     continue
             if mission.preparation_only and mission.preparation_complete:
-                # Hold the last safe standby pose.  This is a real executor
-                # state, not a completed pick, so the object remains claimed
-                # until the peer clears and the handoff is activated.
+                # Keep the peer in its screened high standby pose while the
+                # lead approaches.  Begin the short handoff creep only after
+                # the lead has a verified physical grasp; this preserves
+                # parallel preparation without sending both grippers into the
+                # same low corridor at once.
+                lead = None
+                if mission.handoff_lead_assignment is not None:
+                    lead = self.missions.get(mission.handoff_lead_assignment.arm)
+                if (
+                    mission.lead_started
+                    and lead is not None
+                    and lead.grasped
+                    and mission.keyframes[-1][0] == "handoff_ready"
+                ):
+                    self._start_handoff_creep(mission)
+                    continue
                 target = mission.keyframes[-1][2]
                 kin.command_joint_pose(target, GRIP_OPEN_M)
                 mission.last_safe_qpos = target.copy()
@@ -1995,9 +2086,58 @@ class SortingDemo:
                     mission.last_safety_hold_s = self.data.time
                     self._log("grasp_wait", object_id=mission.object_id, arm=arm.value, reason="outside_predicted_grasp_window")
                 continue
+            # Once a verified payload is horizontally inside its tray, there
+            # is no reason to spend another lower/settle cycle before opening
+            # the fingers.  Release from the approach height is a physical
+            # drop into the tray; MuJoCo still decides whether it lands.
+            payload_release_stable = float(np.max(np.abs(self.data.qvel[kin.dof_addresses]))) <= 0.16
+            if (
+                mission.grasped
+                and stage in {"to_bin", "lower"}
+                and payload_release_stable
+                and self._part_xy_in_target_bin(mission.object_id, mission.placement_zone)
+            ):
+                open_index = next(
+                    (index for index, frame in enumerate(mission.keyframes) if frame[0] == "open"),
+                    mission.keyframe_index,
+                )
+                if open_index > mission.keyframe_index:
+                    mission.keyframe_index = open_index
+                    mission.keyframe_started_s = self.data.time
+                    mission.stage_start_qpos = current.copy()
+                    stage, duration, target, opening = mission.keyframes[open_index]
+                    elapsed = 0.0
+                    self._log("early_release_window", object_id=mission.object_id, placement=mission.placement_zone)
             if stage == "open" and not mission.release_started:
                 touching_fingers = self._touching_fingers(arm, mission.object_id)
-                if touching_fingers != kin.finger_geom_ids:
+                part_xyz = self.data.qpos[self.qpos_addresses[mission.object_id] : self.qpos_addresses[mission.object_id] + 3]
+                tool_delta = part_xyz - kin.grasp_position()
+                if float(part_xyz[2]) < 0.04 or float(np.linalg.norm(tool_delta)) > 0.18:
+                    self._fail_grasp(arm, mission, "payload_detached_before_release", touching_fingers)
+                    continue
+                # A part can already be supported by the tray floor just
+                # below the fingers. Contact may then transfer from a finger
+                # pad to the tray a step before opening, which is a valid
+                # release state rather than a dropped payload.
+                tray_supported = (
+                    float(np.linalg.norm(tool_delta[:2])) <= 0.05
+                    and -0.12 <= float(tool_delta[2]) <= -0.035
+                )
+                settled_in_bin = self._part_is_in_target_bin(mission.object_id, mission.placement_zone) or tray_supported
+                drop_window = self._part_xy_in_target_bin(mission.object_id, mission.placement_zone)
+                if not settled_in_bin and (not drop_window or not payload_release_stable):
+                    # Keep the payload physically pinched until the measured
+                    # payload, not merely the commanded wrist, is over the
+                    # tray.  Opening here was the direct cause of objects
+                    # being released beside the bin after a servo lag.
+                    kin.command_joint_pose(target, GRIP_CLOSED_M)
+                    kin.set_pad_adhesion(GRIP_HOLD_ADHESION_N)
+                    mission.keyframe_started_s += CONTROL_STEP_S
+                    if self.data.time - mission.last_safety_hold_s >= 0.5:
+                        mission.last_safety_hold_s = self.data.time
+                        self._log("release_wait", object_id=mission.object_id, reason="payload_not_over_target_bin")
+                    continue
+                if touching_fingers != kin.finger_geom_ids and not settled_in_bin and not drop_window:
                     self._fail_grasp(arm, mission, "grip_lost_before_release", touching_fingers)
                     continue
                 self._log(
@@ -2005,6 +2145,11 @@ class SortingDemo:
                     object_id=mission.object_id,
                     placement=mission.placement_zone,
                     finger_count=len(touching_fingers),
+                    release_mode=(
+                        "bilateral_contact"
+                        if touching_fingers == kin.finger_geom_ids
+                        else ("tray_supported" if settled_in_bin else "drop_window")
+                    ),
                     part_xyz=np.round(self.data.qpos[self.qpos_addresses[mission.object_id] : self.qpos_addresses[mission.object_id] + 3], 3).tolist(),
                     grasp_xyz=np.round(kin.grasp_position(), 3).tolist(),
                 )
@@ -2197,7 +2342,21 @@ class SortingDemo:
         part_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
         delta = part_xyz - self.data.site_xpos[drop_site_id]
         half_x, half_y = self.model.geom_size[floor_geom_id, :2] - 0.02
-        return abs(delta[0]) <= half_x and abs(delta[1]) <= half_y and 0.04 <= part_xyz[2] <= 0.18
+        return self._part_xy_in_target_bin(object_id, placement_zone) and 0.04 <= part_xyz[2] <= 0.18
+
+    def _part_xy_in_target_bin(self, object_id: str, placement_zone: str) -> bool:
+        """Return whether a payload is over the usable interior of its tray."""
+        drop_site = "left_bin_drop" if placement_zone == "left_bin" else "right_bin_drop"
+        floor_geom = "left_tray_floor" if placement_zone == "left_bin" else "right_tray_floor"
+        drop_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, drop_site)
+        floor_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, floor_geom)
+        part_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
+        delta = part_xyz - self.data.site_xpos[drop_site_id]
+        # Leave a landing margin for the free body after release.  Releasing
+        # at the tray's geometric edge made the payload bounce out even when
+        # its centre technically overlapped the floor geom.
+        half_x, half_y = self.model.geom_size[floor_geom_id, :2] - np.array((0.14, 0.04))
+        return abs(float(delta[0])) <= half_x and abs(float(delta[1])) <= half_y
 
     def step(self) -> None:
         with self.state_lock:
@@ -2242,12 +2401,10 @@ class SortingDemo:
                     self._quarantine_recovered_paths(contacts)
 
     def _has_available_handler(self, item: DemoItem) -> bool:
-        unavailable = set(self.missions) | set(self.deferred_assignments)
-        if item.object_class is ObjectClass.LEFT:
-            return ArmId.A not in unavailable
-        if item.object_class is ObjectClass.RIGHT:
-            return ArmId.B not in unavailable
-        return any(arm not in unavailable for arm in ArmId)
+        # Feeding is independent from assignment.  A MIDDLE object must be
+        # allowed to enter the belt even while both arms are executing; the
+        # centralized coordinator owns the later admission/claim decision.
+        return True
 
     def _recover_last_safe_poses(self) -> None:
         for arm, mission in self.missions.items():

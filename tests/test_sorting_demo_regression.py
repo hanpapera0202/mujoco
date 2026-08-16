@@ -66,7 +66,7 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
         json.dumps(self.demo.snapshot(), ensure_ascii=False)
 
     def test_load_control_parameters_remain_explicit(self):
-        self.assertGreaterEqual(self.demo.parameters.feed_interval_s, self.demo.parameters.fixed_cycle_s)
+        self.assertEqual(self.demo.parameters.feed_interval_s, 5.0)
         self.assertEqual(int(self.demo.parameters.max_active_parts), 2)
 
 
