@@ -51,10 +51,10 @@ TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
 SAFETY_CHECK_PERIOD_S = 0.02
 MAX_VIEWER_SUBSTEPS = 8
-# First validate the moving-target executor independently on both arms.  The
-# centralized two-arm game remains available in the planner, but it must not
-# hide a single-arm prediction or grasp failure during this baseline pass.
-SINGLE_ARM_VALIDATION_MODE = True
+# The validated moving-target executor now runs under the centralized
+# two-arm coordinator.  Joint trajectory preflight decides whether both arms
+# can move in parallel for each batch.
+SINGLE_ARM_VALIDATION_MODE = False
 IK_SOLVER_ID = "qp_rrik"
 IK_SOLVER_NAME = "Box-Constrained QP Resolved-Rate IK"
 # The grasp site is centered on the part, while the finger pads extend below
@@ -145,6 +145,7 @@ class ArmMission:
     last_pick_xyz: np.ndarray | None = None
     tracking_updates: int = 0
     next_safety_check_s: float = 0.0
+    path_blocked_since_s: float | None = None
     preparation_only: bool = False
     handoff_assignment: object | None = None
     handoff_lead_assignment: object | None = None
@@ -1078,6 +1079,8 @@ class SortingDemo:
         start = self.data.qpos[kin.qpos_addresses].copy()
         candidates = self._tracking_ik_candidates(mission.arm, pick_xyz, start)
         if not candidates:
+            if mission.path_blocked_since_s is None:
+                mission.path_blocked_since_s = float(self.data.time)
             mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
             self._log("ik_path_reject", object_id=mission.object_id, arm=mission.arm.value, reason="swept_path_collision")
             # A rejected dynamic path must never leave the previous target in
@@ -1088,9 +1091,14 @@ class SortingDemo:
             for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
                 if index >= mission.keyframe_index and stage in ("track", "descend", "close", "lift"):
                     mission.keyframes[index] = (stage, duration, hold_qpos.copy(), opening)
+            # The old executor held the last pose but kept its stage clock
+            # advancing.  It could therefore enter descend/close with a
+            # rejected trajectory and repeatedly drive into the same guard.
+            mission.keyframe_started_s += TRACKING_IK_PERIOD_S
             mission.trajectory = self._build_trajectory(mission.arm, mission.keyframes[mission.keyframe_index :])
             return
         q_pregrasp, q_pick, _ = candidates[0]
+        mission.path_blocked_since_s = None
         for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
             if stage == "prepare" and index == mission.keyframe_index:
                 prepare_xyz = self._overhead_approach(mission.arm)
@@ -1460,7 +1468,10 @@ class SortingDemo:
         }[assignment.arm]
         rng = np.random.default_rng(self.seed + int(self.data.time * 1000.0) + (1 if assignment.arm is ArmId.A else 2))
         ranges = np.array([self.model.jnt_range[joint_id] for joint_id in kin.joint_ids])
-        candidates = [escape_qpos]
+        # The fixed outer high approach is a deterministic, physically clear
+        # preparation route while the peer starts a shared-middle pick.  Keep
+        # the sampled poses as fallbacks for unusual future geometries.
+        candidates = [base.keyframes[0][2].copy(), escape_qpos]
         candidates.extend(rng.uniform(ranges[:, 0] + 0.05, ranges[:, 1] - 0.05) for _ in range(96))
 
         safe_qpos = None
@@ -1470,7 +1481,10 @@ class SortingDemo:
             probe.keyframes = [("handoff_escape", 4.0, qpos.copy(), GRIP_OPEN_M)]
             probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
             probe.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
-            safe, _ = self._preflight_joint_pair(probe, blocker)
+            # The 10 cm envelopes are a warning zone.  At this stage an
+            # actual physical contact remains a hard rejection, while a
+            # warning-only overlap may proceed to the outer standby pose.
+            safe, _ = self._preflight_joint_pair(probe, blocker, enforce_warning=False)
             if safe:
                 safe_qpos = qpos.copy()
                 break
@@ -1493,7 +1507,7 @@ class SortingDemo:
             ]
             probe.trajectory = self._build_trajectory(probe.arm, probe.keyframes)
             probe.stage_start_qpos = self.data.qpos[kin.qpos_addresses].copy()
-            safe, _ = self._preflight_joint_pair(probe, blocker)
+            safe, _ = self._preflight_joint_pair(probe, blocker, enforce_warning=False)
             if safe:
                 ready_qpos = qpos.copy()
             else:
@@ -1850,7 +1864,7 @@ class SortingDemo:
                         self.paused = True
                     self._log("safety_stop", reason="unrecoverable_forbidden_contact", contact=remaining_contacts[0])
                 else:
-                    self._log("safety_recover", reason="rollback_last_safe_pose", contact=contacts[0])
+                    self._quarantine_recovered_paths(contacts)
 
     def _has_available_handler(self, item: DemoItem) -> bool:
         unavailable = set(self.missions) | set(self.deferred_assignments)
@@ -1887,6 +1901,44 @@ class SortingDemo:
             self.missed.add(mission.object_id)
             self.coordinator.mark_completed(mission.object_id)
             self._log("safety_recover", object_id=mission.object_id, arm=arm.value, reason="abort_and_retract", contact=contacts[0])
+
+    def _quarantine_recovered_paths(self, contacts: list[tuple[str, str]]) -> None:
+        """Retire a command path after physical rollback instead of replaying it.
+
+        A successful rollback proves that the last safe pose is usable; it does
+        not prove that the mission's next target is usable.  Keeping the old
+        target caused an infinite guard-contact/recover loop in the viewer.
+        """
+        unsafe_arms = {
+            arm
+            for first, second in contacts
+            for arm in (self._arm_for_description(first), self._arm_for_description(second))
+            if arm is not None
+        }
+        for arm in unsafe_arms:
+            mission = self.missions.pop(arm, None)
+            if mission is None:
+                continue
+            kin = self.kinematics[arm]
+            kin.command_joint_pose(kin.home_qpos, GRIP_OPEN_M)
+            kin.set_pad_adhesion(0.0)
+            self.missed.add(mission.object_id)
+            self.coordinator.mark_completed(mission.object_id)
+            # A standby peer must not wait forever for a lead path that has
+            # just been revoked.  It may complete its own already-reserved
+            # task when its preparation stage finishes.
+            for peer in self.missions.values():
+                lead = peer.handoff_lead_assignment
+                if lead is not None and lead.object_id == mission.object_id:
+                    peer.handoff_lead_assignment = None
+                    peer.lead_started = True
+            self._log(
+                "path_abort",
+                object_id=mission.object_id,
+                arm=arm.value,
+                reason="recovered_forbidden_contact",
+                contact=contacts[0],
+            )
 
     def run_headless(self, duration_s: float) -> None:
         while self.data.time < duration_s and not self.paused:

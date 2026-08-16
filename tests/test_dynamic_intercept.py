@@ -50,6 +50,16 @@ class DynamicInterceptTests(unittest.TestCase):
         demo._release_unstarted_assignment(assignment)
         self.assertEqual(demo.coordinator.assignment_counts[ArmId.A], 0)
 
+    def test_recovered_guard_contact_retires_the_old_path(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        mission = demo._plan_mission(ArmId.A, "part_01", "left_bin")
+        demo.missions[ArmId.A] = mission
+        with redirect_stdout(StringIO()):
+            demo._quarantine_recovered_paths([("conveyor_right_guard", "A_right_finger_pad")])
+        self.assertNotIn(ArmId.A, demo.missions)
+        self.assertIn("part_01", demo.missed)
+        self.assertEqual(demo.event_log[-1]["event"], "path_abort")
+
     def test_deferred_peer_reaches_safe_standby_without_marking_missed(self):
         demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
         item = demo.items[1]

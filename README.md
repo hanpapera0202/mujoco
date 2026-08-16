@@ -37,7 +37,7 @@ Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版
 & .\.venv\Scripts\python.exe src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
 
-目前基準版本：`0.23.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。
+目前基準版本：`0.24.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。最近一次 100-seed 物理驗證與改進方向記錄於 [dual_arm_validation_20260816_zh.md](docs/dual_arm_validation_20260816_zh.md)。
 
 基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
 
