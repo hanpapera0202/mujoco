@@ -14,32 +14,30 @@ Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版
 
 ## 執行
 
+### VS Code（建議）
+
+1. 在 VS Code 選擇「開啟資料夾」，開啟 `C:\Users\Han\PycharmProjects\mujoco`。
+2. 按 `Ctrl+Shift+P`，執行「Tasks: Run Task」，選擇「初始化 Python 與 MuJoCo 環境」。首次會建立 `.venv`、安裝 MuJoCo 與 Python 擴充功能。
+3. 按 `F5`，從上方啟動選單選擇「雙臂分揀演示（GUI + MuJoCo）」或「單臂抓取驗證（GUI + MuJoCo）」。啟動後會開啟 MuJoCo 與 `http://127.0.0.1:8765` 控制台。
+
+共享的 VS Code 啟動、測試與 Python 設定位於 `.vscode/`；它們會跟著版本控制，讓每台電腦使用相同的執行方式。
+
+### PowerShell
+
 ```powershell
-py -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+.\scripts\setup_windows.ps1
 
 # 開啟 MuJoCo 流水線
-python src\run_sorting_line.py
+& .\.venv\Scripts\python.exe src\run_sorting_line.py
 
 # 開啟固定 seed 的雙手臂抓取、分揀與本機 Web 控制台
-
-目前版本：`0.14.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。
-
-本版新增獨立單臂場景：`models/nova5/nova5_single_arm_sorting_line.xml` 與 `src/run_single_arm_demo.py`。它保留長輸送帶、斜坡投料、動態物件、物理夾爪與左側出料盤，移除 B 臂及雙臂協調器，可單獨重現單臂抓取產線。
-
-本版 IK 改用 `CR-RRIK`（Continuity-Regularized Resolved-Rate IK）：以阻尼 Jacobian 求解末端速度，加入零空間姿勢連續項與關節限位邊界，降低手肘翻轉及腕部突然繞轉。
-
-本版將 handoff 接近段改為並行短視窗規劃：安全待命位通過完整路徑預檢後，待命手臂依 Bayesian readiness 緩慢朝動態預抓取位姿移動，每次只驗證接下來 1 秒，避免錯誤等待共同走廊完全淨空。
-
-本版加入效能節流：追蹤 IK 降至 12.5 Hz、使用 12 次 warm-start 迭代，目標位移小於 8 mm 時不重算；預測安全檢查降至 50 Hz，但 MuJoCo 實體接觸仍每個 500 Hz 控制步檢查。viewer 落後時最多補跑 8 步，避免畫面因追趕模擬時間而卡住。
-
-本版新增中央交接預備：當九組雙臂路徑都被 10 cm 警戒盒否決時，不再讓一臂直接穿過共同區。系統會先以靜態安全姿勢篩選另一臂，讓它經 `handoff_escape` 到 `handoff_ready`，再啟動領先手臂；領先手臂完成後，待命手臂立即轉入原抓取任務。
-python src\run_sorting_demo.py --seed 42
+& .\.venv\Scripts\python.exe src\run_sorting_demo.py --seed 42 --duration 3600
 
 # 執行可重現的第一版基準範例
-python src\run_benchmark.py --seeds 30 --output-dir results\v1
+& .\.venv\Scripts\python.exe src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
+
+目前基準版本：`0.23.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。
 
 基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
 

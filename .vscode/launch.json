@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "雙臂分揀演示（GUI + MuJoCo）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/run_sorting_demo.py",
+      "args": [
+        "--seed",
+        "42",
+        "--duration",
+        "3600"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "單臂抓取驗證（GUI + MuJoCo）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/run_single_arm_demo.py",
+      "args": [
+        "--seed",
+        "42",
+        "--duration",
+        "3600"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "執行完整測試",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    }
+  ]
+}
