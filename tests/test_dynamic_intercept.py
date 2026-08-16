@@ -195,6 +195,31 @@ class DynamicInterceptTests(unittest.TestCase):
         self.assertEqual(demo.missed, set())
         self.assertEqual(mission.keyframes[mission.keyframe_index][0], "handoff_ready")
 
+    def test_two_prepared_peers_without_a_lead_promote_the_urgent_object(self):
+        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=42)
+        assignments = (
+            Candidate(ArmId.A, "part_01", ObjectClass.MIDDLE, "shared_middle", "left_bin", (0.0, 10.0), 1.0),
+            Candidate(ArmId.B, "part_02", ObjectClass.MIDDLE, "shared_middle", "right_bin", (0.0, 10.0), 1.0),
+        )
+        for assignment in assignments:
+            item = next(item for item in demo.items if item.part_name == assignment.object_id)
+            place_part(demo.data, demo.qpos_addresses[item.part_name], item.spawn_xyz)
+            demo.spawned.add(item.part_name)
+            mission = demo._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
+            mission.preparation_only = True
+            mission.preparation_complete = True
+            mission.handoff_assignment = assignment
+            mission.keyframes = [("handoff_ready", 1.0, demo.kinematics[assignment.arm].home_qpos, 0.035)]
+            mission.keyframe_index = 0
+            demo.missions[assignment.arm] = mission
+        # B is closer to the tail, so it must become the central recovery lead.
+        demo.data.qpos[demo.qpos_addresses["part_02"] + 1] = 0.3
+        mujoco.mj_forward(demo.model, demo.data)
+        with redirect_stdout(StringIO()):
+            demo._activate_prepared_handoffs()
+        self.assertFalse(demo.missions[ArmId.B].preparation_only)
+        self.assertIn("handoff_deadlock_promote", [event["event"] for event in demo.event_log])
+
 
 if __name__ == "__main__":
     unittest.main()

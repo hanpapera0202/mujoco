@@ -1714,6 +1714,52 @@ class SortingDemo:
                     self._log("handoff_lead_start", object_id=lead_assignment.object_id, arm=lead_assignment.arm.value)
                 else:
                     continue
+        # Recovery can leave both members of a newly injected batch in
+        # ``handoff_prepare`` without a predeclared lead.  The former logic
+        # only promoted a standby once there was fewer than two missions,
+        # so two valid standby arms waited for one another until both moving
+        # objects passed the tail.  Break that symmetric deadlock centrally:
+        # promote the object with less conveyor time remaining, but only after
+        # its full path is physically clear against the peer's measured
+        # standby posture.  This is a temporary sequence, not a fixed A/B
+        # priority, and the peer is promoted immediately after clearance.
+        prepared_without_lead = [
+            mission
+            for mission in self.missions.values()
+            if (
+                mission.preparation_only
+                and mission.preparation_complete
+                and mission.handoff_assignment is not None
+                and mission.handoff_lead_assignment is None
+            )
+        ]
+        if len(prepared_without_lead) >= 2:
+            def remaining_conveyor_time(mission: ArmMission) -> float:
+                part_y = float(self.data.qpos[self.qpos_addresses[mission.object_id] + 1])
+                downstream_speed = max(0.03, -float(self.data.qvel[self.part_dof_addresses[mission.object_id] + 1]))
+                return max(0.0, (part_y - TAIL_EXIT_Y_M) / downstream_speed)
+
+            leader = min(prepared_without_lead, key=remaining_conveyor_time)
+            assignment = leader.handoff_assignment
+            probe = self._plan_mission(assignment.arm, assignment.object_id, assignment.placement_zone)
+            safe, reason = self._preflight_mission(probe, enforce_warning=False)
+            if safe:
+                self.missions[leader.arm] = probe
+                self.arm_outcomes[leader.arm]["attempts"] += 1
+                self._log(
+                    "handoff_deadlock_promote",
+                    object_id=assignment.object_id,
+                    arm=assignment.arm.value,
+                    reason="least_remaining_conveyor_time",
+                )
+            elif self.data.time - leader.last_safety_hold_s >= 0.5:
+                leader.last_safety_hold_s = self.data.time
+                self._log(
+                    "handoff_deadlock_wait",
+                    object_id=assignment.object_id,
+                    arm=assignment.arm.value,
+                    reason=reason,
+                )
         if len(self.missions) < 2:
             for arm, mission in list(self.missions.items()):
                 if not mission.preparation_only or mission.handoff_assignment is None or not mission.preparation_complete:
