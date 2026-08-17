@@ -185,6 +185,7 @@ class ArmMission:
     lead_started: bool = False
     handoff_target_qpos: np.ndarray | None = None
     preparation_complete: bool = False
+    grasp_recenter_attempts: int = 0
 
     @property
     def done(self) -> bool:
@@ -1894,7 +1895,12 @@ class SortingDemo:
         # pose whose actuator lag later drove both grippers into one another.
         # Try the deterministic home posture first, then the screened outer
         # poses as explicit fallbacks.
-        candidates = [kin.home_qpos.copy(), base.keyframes[0][2].copy(), escape_qpos]
+        # A standby pose must be visibly and functionally prepared.  Trying
+        # home first made the first collision-free candidate win, so the peer
+        # often remained parked even though a high outer approach was safe.
+        # Prefer the overhead approach, then the outer escape, and use home
+        # only as the final geometrical fallback.
+        candidates = [base.keyframes[0][2].copy(), escape_qpos, kin.home_qpos.copy()]
         candidates.extend(rng.uniform(ranges[:, 0] + 0.05, ranges[:, 1] - 0.05) for _ in range(96))
 
         safe_qpos = None
@@ -2310,6 +2316,32 @@ class SortingDemo:
                 orientation_error=round(orientation_error, 4),
             )
             return True
+        if touching_fingers != kin.finger_geom_ids and mission.grasp_recenter_attempts < 1:
+            # A single-pad edge touch is not a grasp yet.  Use the measured
+            # payload centre for one guarded close-stage recentering attempt;
+            # the next solver step must still report bilateral contact before
+            # the mission can enter lift.
+            target = self._grasp_target(arm, object_xyz)
+            current = self.data.qpos[kin.qpos_addresses].copy()
+            candidate = kin.solve_resolved_rate_ik(
+                target,
+                current,
+                max_iterations=12,
+                target_xmat=GRASP_XMAT,
+            )
+            if (
+                kin.grasp_position_residual(target, candidate) <= 0.060
+                and self._pose_is_safe(arm, candidate, GRIP_OPEN_M, reserve_peer_command=True)
+            ):
+                for index, (stage, duration, frame_target, opening) in enumerate(mission.keyframes):
+                    if index == mission.keyframe_index and stage == "close":
+                        mission.keyframes[index] = (stage, duration, candidate, opening)
+                        mission.stage_start_qpos = current
+                        mission.keyframe_started_s = self.data.time
+                        mission.last_pick_xyz = target.copy()
+                        mission.grasp_recenter_attempts += 1
+                        self._log("grasp_recenter", object_id=mission.object_id, arm=arm.value)
+                        break
         return False
 
     def _touching_fingers(self, arm: ArmId, object_id: str) -> set[int]:
