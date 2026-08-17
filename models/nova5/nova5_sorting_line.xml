@@ -121,43 +121,43 @@
 
     <body name="part_01" pos="-0.42 0.83 0.065">
       <freejoint/>
-      <geom type="box" size="0.025 0.025 0.030" material="part_blue" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.025 0.025 0.030" material="part_blue" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_02" pos="-0.15 0.92 0.065">
       <freejoint/>
-      <geom type="box" size="0.023 0.023 0.030" material="part_green" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.023 0.023 0.030" material="part_green" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_03" pos="0.36 0.87 0.065">
       <freejoint/>
-      <geom type="box" size="0.024 0.024 0.030" material="part_yellow" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.024 0.024 0.030" material="part_yellow" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_04" pos="0.12 0.56 0.065">
       <freejoint/>
-      <geom type="box" size="0.024 0.024 0.030" material="part_blue" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.024 0.024 0.030" material="part_blue" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_05" pos="-0.48 0.33 0.065">
       <freejoint/>
-      <geom type="box" size="0.026 0.026 0.030" material="part_green" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.026 0.026 0.030" material="part_green" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_06" pos="0.45 0.29 0.065">
       <freejoint/>
-      <geom type="box" size="0.025 0.025 0.030" material="part_yellow" mass="0.035" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.025 0.025 0.030" material="part_yellow" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_07" pos="-0.60 0.78 0.060">
       <freejoint/>
-      <geom type="cylinder" size="0.026 0.030" material="part_orange" mass="0.030" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="cylinder" size="0.026 0.030" material="part_orange" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_08" pos="0.58 0.73 0.074">
       <freejoint/>
-      <geom type="capsule" size="0.021 0.032" material="part_white" mass="0.028" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="capsule" size="0.021 0.032" material="part_white" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_09" pos="-0.32 0.49 0.062">
       <freejoint/>
-      <geom type="box" size="0.032 0.020 0.030" material="part_blue" mass="0.032" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="box" size="0.032 0.020 0.030" material="part_blue" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_10" pos="0.38 0.46 0.060">
       <freejoint/>
-      <geom type="cylinder" size="0.024 0.030" material="part_green" mass="0.029" contype="32" conaffinity="32" friction="1.2 0.02 0.001"/>
+      <geom type="cylinder" size="0.024 0.030" material="part_green" mass="0.060" contype="32" conaffinity="32" friction="2.0 0.02 0.001"/>
     </body>
     <body name="part_11" pos="-0.05 0.25 0.070">
       <freejoint/>
