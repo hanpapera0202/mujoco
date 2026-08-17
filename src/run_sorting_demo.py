@@ -2208,6 +2208,17 @@ class SortingDemo:
             )
             if stage == "close" and stage_reached and not mission.grasped:
                 if not self._confirm_grasp(arm, mission):
+                    # Contact can arrive on adjacent solver steps because the
+                    # two slide actuators do not settle identically.  Keep the
+                    # jaws physically closed for a short confirmation window
+                    # instead of declaring a miss on the first single-pad
+                    # observation.
+                    if elapsed < duration + 0.80:
+                        mission.keyframe_started_s += CONTROL_STEP_S
+                        continue
+                    touching_fingers = self._touching_fingers(arm, mission.object_id)
+                    reason = "no_bilateral_finger_contact" if touching_fingers != kin.finger_geom_ids else "grasp_pose_error"
+                    self._fail_grasp(arm, mission, reason, touching_fingers)
                     continue
                 # Adhesion is enabled only after bilateral MuJoCo contact has
                 # been verified.  It remains a force-based free-body grasp,
@@ -2299,8 +2310,6 @@ class SortingDemo:
                 orientation_error=round(orientation_error, 4),
             )
             return True
-        reason = "no_bilateral_finger_contact" if touching_fingers != kin.finger_geom_ids else "grasp_pose_error"
-        self._fail_grasp(arm, mission, reason, touching_fingers)
         return False
 
     def _touching_fingers(self, arm: ArmId, object_id: str) -> set[int]:
@@ -2355,7 +2364,12 @@ class SortingDemo:
         # Leave a landing margin for the free body after release.  Releasing
         # at the tray's geometric edge made the payload bounce out even when
         # its centre technically overlapped the floor geom.
-        half_x, half_y = self.model.geom_size[floor_geom_id, :2] - np.array((0.14, 0.04))
+        # The floor geom already represents the physical tray interior.  The
+        # previous 14 cm X inset rejected parts that had visibly landed on the
+        # tray, especially after the wrist IK residual shifted a drop by a few
+        # centimetres.  Keep a small edge margin for bounce, but do not shrink
+        # the usable tray to a narrow mathematical centre strip.
+        half_x, half_y = self.model.geom_size[floor_geom_id, :2] - np.array((0.08, 0.03))
         return abs(float(delta[0])) <= half_x and abs(float(delta[1])) <= half_y
 
     def step(self) -> None:
@@ -2376,8 +2390,12 @@ class SortingDemo:
                 batch_time_s = min(item.spawn_time_s for item in pending)
                 batch = [item for item in pending if abs(item.spawn_time_s - batch_time_s) < 1e-9]
                 enough_capacity = active_parts + len(batch) <= effective_capacity
-                handlers_available = all(self._has_available_handler(item) for item in batch)
-                if enough_capacity and handlers_available:
+                # Infeed is a conveyor event, not a robot admission event.
+                # Handler availability belongs to the centralized scheduler;
+                # coupling it here made ``feed_interval_s`` silently wait for
+                # a completed grasp.  Only physical active-part capacity may
+                # defer the scheduled feed.
+                if enough_capacity:
                     for item in batch:
                         place_part(self.data, self.qpos_addresses[item.part_name], item.spawn_xyz)
                         self.spawned.add(item.part_name)
