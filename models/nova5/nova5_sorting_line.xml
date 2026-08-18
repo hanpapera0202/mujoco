@@ -79,7 +79,7 @@
     <body name="conveyor_collision_surface" pos="0 0.10 0">
       <!-- Match the moving segment top (z=0.10 m) so payloads cannot fall
            through at a segment seam or collide with two different heights. -->
-      <geom name="conveyor_belt_collision" type="box" pos="0 0 0.090" size="0.225 2.53 0.010" material="belt_mat" contype="32" conaffinity="32" friction="1.4 0.02 0.001"/>
+      <geom name="conveyor_belt_collision" type="box" pos="0 0 0.090" size="0.225 2.53 0.010" material="belt_mat" rgba="0 0 0 0" contype="32" conaffinity="32" friction="1.4 0.02 0.001"/>
     </body>
     <body name="belt_segment_01" pos="0 0 0.075">
       <joint name="belt_segment_01_slide" type="slide" axis="0 1 0" limited="false"/>
