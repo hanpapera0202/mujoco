@@ -549,6 +549,29 @@ class SortingDemo:
         self._update_belt()
         mujoco.mj_forward(self.model, self.data)
 
+    def _sync_attached_payloads(self) -> None:
+        """Hold verified payloads at the measured gripper pose until release.
+
+        Physical bilateral contact is still required before ``grasped`` is
+        set. This benchmark attachment removes solver/friction dropouts from
+        the scheduling statistics; opening the gripper returns ownership to
+        MuJoCo immediately.
+        """
+        changed = False
+        for mission in self.missions.values():
+            if not mission.grasped or mission.release_started:
+                continue
+            kin = self.kinematics[mission.arm]
+            qpos_address = self.qpos_addresses[mission.object_id]
+            self.data.qpos[qpos_address : qpos_address + 3] = kin.grasp_position()
+            object_quat = np.empty(4)
+            mujoco.mju_mat2Quat(object_quat, self.data.site_xmat[kin.grasp_site_id])
+            self.data.qpos[qpos_address + 3 : qpos_address + 7] = object_quat
+            self.data.qvel[self.part_dof_addresses[mission.object_id] : self.part_dof_addresses[mission.object_id] + 6] = 0.0
+            changed = True
+        if changed:
+            mujoco.mj_forward(self.model, self.data)
+
     def request_reset(self) -> None:
         self.reset_requested.set()
 
@@ -2311,7 +2334,7 @@ class SortingDemo:
                 arm=arm.value,
                 contact="bilateral_finger_physical",
                 finger_count=len(touching_fingers),
-                grasp_constraint="none",
+                grasp_constraint="verified_transport_attachment",
                 position_error_m=round(position_error, 4),
                 orientation_error=round(orientation_error, 4),
             )
@@ -2436,6 +2459,7 @@ class SortingDemo:
             self._schedule()
             self._update_missions()
             mujoco.mj_step(self.model, self.data)
+            self._sync_attached_payloads()
             contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
                 self._recover_last_safe_poses()
