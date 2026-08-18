@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from itertools import combinations
 from math import dist
 from typing import Iterable
+
+from evolutionary_planner import EvolutionaryPlanner
 
 
 class ArmId(str, Enum):
@@ -105,6 +106,7 @@ class CentralCoordinator:
         self.travel_weight = travel_weight
         self.reservations: list[Reservation] = []
         self.assignment_counts = {ArmId.A: 0, ArmId.B: 0}
+        self.evolutionary_planner = EvolutionaryPlanner()
 
     def decide(
         self,
@@ -205,28 +207,16 @@ class CentralCoordinator:
         return "shared_middle" if object_class is ObjectClass.MIDDLE else f"exclusive_{object_class.value}"
 
     def _choose_global_assignment(self, candidates: list[Candidate]) -> list[Candidate]:
-        feasible_sets: list[tuple[Candidate, ...]] = [()]
-        feasible_sets.extend((candidate,) for candidate in candidates if not self._reservation_conflicts(candidate))
-        for first, second in combinations(candidates, 2):
-            pair = (first, second)
-            if first.arm is second.arm or first.object_id == second.object_id:
-                continue
-            if self._reservation_conflicts(first) or self._reservation_conflicts(second):
-                continue
-            if self._pair_conflicts(first, second):
-                continue
-            feasible_sets.append(pair)
-
-        def objective(items: tuple[Candidate, ...]) -> tuple[float, int, int, int, float]:
-            # Prefer two useful, simultaneous motions before minor score gains.
-            parallel = self.parallel_bonus if len(items) == 2 else 0.0
-            score = sum(item.score for item in items) + parallel
-            fairness = -sum(self.assignment_counts[item.arm] for item in items)
-            initial_a_priority = sum(item.arm is ArmId.A for item in items)
-            earliest_deadline_proxy = -sum(item.interval_s[1] for item in items)
-            return score, len(items), fairness, initial_a_priority, earliest_deadline_proxy
-
-        return list(max(feasible_sets, key=objective))
+        plan = self.evolutionary_planner.choose(
+            candidates,
+            parallel_bonus=self.parallel_bonus,
+            assignment_counts=self.assignment_counts,
+            pair_conflicts=self._pair_conflicts,
+            reservation_conflicts=self._reservation_conflicts,
+        )
+        # Keep the coordinator's public contract unchanged: only hard-screened
+        # candidate assignments leave this method.
+        return [candidates[index] for index in plan.indices]
 
     def _pair_conflicts(self, first: Candidate, second: Candidate) -> bool:
         if first.workspace_zone == second.workspace_zone == "shared_middle":
