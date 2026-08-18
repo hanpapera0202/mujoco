@@ -1,7 +1,7 @@
 const blocks = [
   { id: 'infeed', kind: 'input', title: '投料設定', detail: 'Seed、批量、X/Y 範圍與皮帶速度' },
   { id: 'screen', kind: 'decision', title: 'CSPR 快篩', detail: '可達性、期限、固定障礙與關節限位' },
-  { id: 'joint', kind: 'decision', title: 'BC-JSP 中央聯合策略', detail: 'direct / reserved 成對路徑與貝式效用' },
+  { id: 'joint', kind: 'decision', title: 'BC-GP-JSP 中央聯合策略', detail: 'GA 分配、PSO 權重與貝式效用' },
   { id: 'a', kind: 'action', title: 'Nova5 A 任務', detail: '高位準備、跟帶、下探、雙指抓取' },
   { id: 'b', kind: 'action', title: 'Nova5 B 任務', detail: '高位準備、保留走廊、雙指抓取' },
   { id: 'verify', kind: 'decision', title: '物理驗證', detail: '碰撞盒、抓取接觸、托盤落點、事件紀錄' },

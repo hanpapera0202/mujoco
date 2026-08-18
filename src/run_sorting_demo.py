@@ -137,7 +137,7 @@ class DemoParameters:
 
 
 CSPR_ALGORITHM_ID = "bc_jsp"
-CSPR_ALGORITHM_NAME = "BC-JSP - Bayesian Centralized Joint Strategy Planner"
+CSPR_ALGORITHM_NAME = "BC-GP-JSP - Bayesian Centralized Genetic-Particle Joint Strategy Planner"
 # Normal Nova5 tool frame for travel and tray placement.
 GENERAL_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
 # Reachable top-down frame: local -Z points down to the belt.
@@ -2227,7 +2227,7 @@ class SortingDemo:
                     self._fail_grasp(arm, mission, reason, touching_fingers)
                     continue
                 # Adhesion is enabled only after bilateral MuJoCo contact has
-                # been verified.  It remains a force-based free-body grasp,
+                # been verified. It remains a force-based free-body grasp,
                 # rather than directly writing the part pose or adding a
                 # kinematic teleport constraint.
                 kin.set_pad_adhesion(GRIP_HOLD_ADHESION_N)
