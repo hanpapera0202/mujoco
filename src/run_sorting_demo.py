@@ -47,6 +47,9 @@ CONTROL_STEP_S = 0.002
 SCHEDULER_PERIOD_S = 0.10
 TRACKING_IK_PERIOD_S = 0.04
 TRACKING_LEAD_S = 0.10
+REFERENCE_BELT_SPEED_MPS = 0.09
+MIN_TRACKING_PERIOD_S = 0.015
+MAX_TRACKING_LEAD_S = 0.25
 TRACKING_IK_MAX_ITERATIONS = 24
 TRACKING_IK_MIN_TARGET_DELTA_M = 0.003
 # The batch route carries the precise top-down pose. Runtime tracking may
@@ -686,7 +689,7 @@ class SortingDemo:
                 "parameters": asdict(self.parameters),
                 "performance": {
                     "control_hz": round(1.0 / CONTROL_STEP_S, 1),
-                    "tracking_ik_hz": round(1.0 / TRACKING_IK_PERIOD_S, 1),
+                    "tracking_ik_hz": round(1.0 / self._tracking_period_s(), 1),
                     "safety_prediction_hz": round(1.0 / SAFETY_CHECK_PERIOD_S, 1),
                     "max_viewer_substeps": MAX_VIEWER_SUBSTEPS,
                 },
@@ -1204,6 +1207,22 @@ class SortingDemo:
         velocity[1] = -self.parameters.belt_speed_mps
         return xyz + velocity * max(0.0, horizon_s)
 
+    def _tracking_period_s(self) -> float:
+        """Adapt IK refresh to belt travel per update, not wall-clock alone."""
+        speed = max(0.01, float(self.parameters.belt_speed_mps))
+        return max(
+            MIN_TRACKING_PERIOD_S,
+            min(TRACKING_IK_PERIOD_S, TRACKING_IK_PERIOD_S * REFERENCE_BELT_SPEED_MPS / speed),
+        )
+
+    def _tracking_lead_s(self) -> float:
+        """Use a speed-scaled prediction lead while keeping it bounded."""
+        speed = max(0.01, float(self.parameters.belt_speed_mps))
+        return max(
+            CONTROL_STEP_S * 2.0,
+            min(MAX_TRACKING_LEAD_S, TRACKING_LEAD_S * speed / REFERENCE_BELT_SPEED_MPS),
+        )
+
     @staticmethod
     def _grasp_target(arm: ArmId, part_xyz: np.ndarray) -> np.ndarray:
         return part_xyz + GRASP_ALIGNMENT_OFFSET_M[arm]
@@ -1324,7 +1343,7 @@ class SortingDemo:
             intercept_close_s,
             output_slot=output_slot,
             keyframe_started_s=self.data.time,
-            next_replan_s=self.data.time + 0.25,
+            next_replan_s=self.data.time + self._tracking_period_s(),
             last_safe_qpos=self.data.qpos[kin.qpos_addresses].copy(),
             assigned_at_s=float(self.data.time),
             trajectory=self._build_trajectory(arm, keyframes),
@@ -1360,7 +1379,7 @@ class SortingDemo:
         # Do not replace it with a direct current->pick IK path while it is
         # still in progress; that was the source of the guard collision.
         if current_stage == "prepare":
-            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+            mission.next_replan_s = self.data.time + self._tracking_period_s()
             return
 
         # Predict the part at the remaining time until the close stage, not
@@ -1373,7 +1392,7 @@ class SortingDemo:
         # The Cartesian pick must align at *entry* to ``close``. The close
         # frame's duration is finger travel, not additional conveyor lead.
         remaining_to_close_s += sum(frame[1] for frame in mission.keyframes[mission.keyframe_index + 1 : close_index])
-        prediction_horizon_s = max(TRACKING_LEAD_S, remaining_to_close_s)
+        prediction_horizon_s = max(self._tracking_lead_s(), remaining_to_close_s)
         mission.intercept_close_s = float(self.data.time + remaining_to_close_s)
         pick_xyz = self._grasp_target(
             mission.arm,
@@ -1381,7 +1400,7 @@ class SortingDemo:
         )
         pick_xyz[2] = max(MIN_PICK_HEIGHT_M, pick_xyz[2])
         if mission.last_pick_xyz is not None and np.linalg.norm(pick_xyz - mission.last_pick_xyz) < TRACKING_IK_MIN_TARGET_DELTA_M:
-            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+            mission.next_replan_s = self.data.time + self._tracking_period_s()
             return
         pregrasp = pick_xyz.copy()
         pregrasp[2] = PREGRASP_HEIGHT_M
@@ -1411,11 +1430,11 @@ class SortingDemo:
                             mission.keyframes[index] = (stage, duration, q_pick, opening)
                             break
                     mission.last_pick_xyz = pick_xyz.copy()
-                    mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+                    mission.next_replan_s = self.data.time + self._tracking_period_s()
                     return
             if mission.path_blocked_since_s is None:
                 mission.path_blocked_since_s = float(self.data.time)
-            mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+            mission.next_replan_s = self.data.time + self._tracking_period_s()
             if self.data.time - mission.last_path_reject_log_s >= 0.5:
                 mission.last_path_reject_log_s = float(self.data.time)
                 self._log("ik_path_reject", object_id=mission.object_id, arm=mission.arm.value, reason="swept_path_collision")
@@ -1428,7 +1447,7 @@ class SortingDemo:
             # The old executor held the last pose but kept its stage clock
             # advancing.  It could therefore enter descend/close with a
             # rejected trajectory and repeatedly drive into the same guard.
-            mission.keyframe_started_s += TRACKING_IK_PERIOD_S
+            mission.keyframe_started_s += self._tracking_period_s()
             return
         q_pregrasp, q_pick, _ = candidates[0]
         updated = copy.deepcopy(mission)
@@ -1447,8 +1466,8 @@ class SortingDemo:
         if mission.joint_strategy is not None:
             jointly_safe, reason = self._preflight_mission(updated, enforce_warning=False)
             if not jointly_safe:
-                mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
-                mission.keyframe_started_s += TRACKING_IK_PERIOD_S
+                mission.next_replan_s = self.data.time + self._tracking_period_s()
+                mission.keyframe_started_s += self._tracking_period_s()
                 hold_qpos = mission.last_safe_qpos.copy() if mission.last_safe_qpos is not None else start
                 self._hold_pregrasp_targets(mission, hold_qpos)
                 # A blocked moving-target branch can be evaluated every
@@ -1468,14 +1487,14 @@ class SortingDemo:
         mission.trajectory = updated.trajectory
         mission.last_pick_xyz = pick_xyz.copy()
         mission.tracking_updates += 1
-        mission.next_replan_s = self.data.time + TRACKING_IK_PERIOD_S
+        mission.next_replan_s = self.data.time + self._tracking_period_s()
 
     def _grasp_window_ready(self, arm: ArmId, object_id: str) -> bool:
         """Require both measured proximity and belt-speed prediction agreement."""
         kin = self.kinematics[arm]
         object_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
         grasp_xyz = kin.grasp_position()
-        predicted_xyz = self._predict_part_position(object_id, TRACKING_LEAD_S)
+        predicted_xyz = self._predict_part_position(object_id, self._tracking_lead_s())
         measured_xy_error = float(np.linalg.norm(object_xyz[:2] - grasp_xyz[:2]))
         predicted_xy_error = float(np.linalg.norm(predicted_xyz[:2] - grasp_xyz[:2]))
         measured_z_error = abs(float(object_xyz[2] - grasp_xyz[2]))
@@ -2029,7 +2048,7 @@ class SortingDemo:
         duration = 2.0 + 3.0 * (1.0 - readiness)
         pick_xyz = self._grasp_target(
             standby.arm,
-            self._predict_part_position(object_id=standby.object_id, horizon_s=duration + TRACKING_LEAD_S),
+            self._predict_part_position(object_id=standby.object_id, horizon_s=duration + self._tracking_lead_s()),
         )
         pick_xyz[2] = PREGRASP_HEIGHT_M
         creep_qpos = kin.solve_position_ik(
