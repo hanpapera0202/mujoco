@@ -44,11 +44,11 @@ import mujoco.viewer
 
 
 CONTROL_STEP_S = 0.002
-SCHEDULER_PERIOD_S = 0.25
-TRACKING_IK_PERIOD_S = 0.08
+SCHEDULER_PERIOD_S = 0.10
+TRACKING_IK_PERIOD_S = 0.04
 TRACKING_LEAD_S = 0.10
 TRACKING_IK_MAX_ITERATIONS = 24
-TRACKING_IK_MIN_TARGET_DELTA_M = 0.008
+TRACKING_IK_MIN_TARGET_DELTA_M = 0.003
 # The batch route carries the precise top-down pose. Runtime tracking may
 # accept a coarser incremental correction, but must reject a clearly wrong
 # joint-limit branch before it can replace that verified route.
@@ -1227,7 +1227,20 @@ class SortingDemo:
         # for two arms to service a 5 s feed cadence.  The close stage still
         # waits on measured contact, so shortening these requests does not
         # turn an inaccurate pose into a fake grasp.
-        prepare_s, track_s, descend_s, close_s = 0.90, 1.10, 2.20, 0.60
+        # The belt cadence is user-controlled.  Keep the nominal motion
+        # cycle below a 10 s feed interval so an older mission cannot make a
+        # later object pass the actual grasp corridor before admission.  The
+        # accelerated profile is limited to that explicit slow-feed mode;
+        # the default 5 s benchmark keeps its previously validated timing.
+        accelerated = self.parameters.feed_interval_s >= 8.0
+        if accelerated:
+            prepare_s, track_s, descend_s, close_s = 0.45, 0.55, 1.10, 0.35
+            lift_s, transfer_s, lower_s = 1.20, 2.00, 0.60
+            open_s, settle_s, retreat_s, home_s = 0.30, 0.30, 0.60, 0.90
+        else:
+            prepare_s, track_s, descend_s, close_s = 0.90, 1.10, 2.20, 0.60
+            lift_s, transfer_s, lower_s = 2.40, 4.00, 1.20
+            open_s, settle_s, retreat_s, home_s = 0.60, 0.80, 1.20, 1.80
         time_to_close_s = prepare_s + track_s + descend_s + close_s
         close_delay_s = max(0.0, close_delay_s)
         intercept_close_s = self.data.time + time_to_close_s + close_delay_s
@@ -1293,15 +1306,15 @@ class SortingDemo:
                 # Keep force applied long enough for a bilateral pinch to
                 # settle before lifting.
                 ("close", close_s, q_pick, GRIP_CLOSED_M),
-                ("lift", 2.40, q_pregrasp, GRIP_CLOSED_M),
+                ("lift", lift_s, q_pregrasp, GRIP_CLOSED_M),
                 # Let the real position servo finish the horizontal transfer
                 # before the release-window check; the lift remains fast.
-                ("to_bin", 4.00, q_bin_approach, GRIP_CLOSED_M),
-                ("lower", 1.20, q_drop, GRIP_CLOSED_M),
-                ("open", 0.60, q_drop, GRIP_OPEN_M),
-                ("settle", 0.80, q_drop, GRIP_OPEN_M),
-                ("retreat", 1.20, q_bin_approach, GRIP_OPEN_M),
-                ("home", 1.80, q_home, GRIP_OPEN_M),
+                ("to_bin", transfer_s, q_bin_approach, GRIP_CLOSED_M),
+                ("lower", lower_s, q_drop, GRIP_CLOSED_M),
+                ("open", open_s, q_drop, GRIP_OPEN_M),
+                ("settle", settle_s, q_drop, GRIP_OPEN_M),
+                ("retreat", retreat_s, q_bin_approach, GRIP_OPEN_M),
+                ("home", home_s, q_home, GRIP_OPEN_M),
             ]
         return ArmMission(
             arm,
@@ -1501,6 +1514,11 @@ class SortingDemo:
             }
             return
         observations = self._available_observations()
+        # The deadline is the physical tail, not the order in which the
+        # feeder happened to create the objects.  Always expose the most
+        # urgent intercept first so a deferred task cannot be starved by a
+        # newer arrival.
+        observations.sort(key=lambda item: (item.deadline_s, item.object_id))
         # Avoid a Braess-like local greedy commitment: when the feed is faster
         # than one service cycle, retain a lone object briefly so the imminent
         # peer can enter the 3 x 3 joint-strategy game with it.
@@ -1777,6 +1795,35 @@ class SortingDemo:
                 self.coordinator.mark_completed(assignment.object_id)
                 self._log("missed", object_id=assignment.object_id, reason="tail_exit_while_deferred")
                 continue
+            # A reservation is useful only while its original arm can still
+            # reach the moving intercept.  Near the tail, give the other
+            # equal-peer arm one chance to take the same object if it is
+            # idle.  This changes only the centralized assignment; physical
+            # preflight and the live contact guard still decide admission.
+            remaining_s = (part_y - TAIL_EXIT_Y_M) / max(0.03, self.parameters.belt_speed_mps)
+            peer = ArmId.B if arm is ArmId.A else ArmId.A
+            if remaining_s <= max(4.0, self.parameters.fixed_cycle_s * 0.75) and peer not in self.missions:
+                transferred = Candidate(
+                    peer,
+                    assignment.object_id,
+                    assignment.object_class,
+                    assignment.workspace_zone,
+                    "left_bin" if peer is ArmId.A else "right_bin",
+                    assignment.interval_s,
+                    assignment.score,
+                )
+                old_count = self.coordinator.assignment_counts[arm]
+                self.coordinator.assignment_counts[arm] = max(0, old_count - 1)
+                self.coordinator.assignment_counts[peer] += 1
+                self.deferred_assignments.pop(arm)
+                if self._start_assignment(transferred):
+                    self._log("deferred_reassign", object_id=assignment.object_id, from_arm=arm.value, to_arm=peer.value)
+                    continue
+                # If the peer could not pass its own screen, keep the
+                # original reservation alive for the next scheduler tick.
+                self.coordinator.assignment_counts[peer] = max(0, self.coordinator.assignment_counts[peer] - 1)
+                self.coordinator.assignment_counts[arm] += 1
+                self.deferred_assignments[arm] = assignment
             if arm not in self.missions and arm in self.handoff_leads:
                 if self._start_handoff_preparation(assignment):
                     self.deferred_assignments.pop(arm)
