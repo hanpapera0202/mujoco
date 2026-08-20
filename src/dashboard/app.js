@@ -64,6 +64,14 @@ document.querySelector('#settings').onsubmit = event => {
   const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
   values.algorithm = algorithmSelect.value;
   settingsStatus.textContent = '正在套用…';
-  control('settings', values).then(state => { settingsStatus.textContent = '已套用並重新播放'; render(state); }).catch(error => { settingsStatus.textContent = '套用失敗'; window.alert(error.message); });
+  control('settings', values).then(async () => {
+    // Settings request a deterministic reset on the simulation thread. Read
+    // back after that reset so the form reflects the running MuJoCo state.
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const applied = await (await fetch('/api/state', {cache: 'no-store'})).json();
+    initialized = false;
+    settingsStatus.textContent = '已套用，實際模擬已重播';
+    render(applied);
+  }).catch(error => { settingsStatus.textContent = '套用失敗'; window.alert(error.message); });
 };
 refresh(); setInterval(refresh, 350);
