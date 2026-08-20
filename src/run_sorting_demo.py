@@ -123,7 +123,10 @@ class DemoParameters:
     # availability is decided later by the central scheduler.
     # Two in-flight payloads let both arms work in parallel without allowing
     # a blocked handoff to fill the belt and starve the oldest object.
-    max_active_parts: float = 2.0
+    # No artificial conveyor admission cap in the dual-arm demonstration.
+    # The physical scene contains ten payload bodies, so all scheduled items
+    # may coexist while the coordinator decides when each arm may enter.
+    max_active_parts: float = 10.0
     simulation_speed: float = 1.0
     warning_margin_m: float = 0.10
     feed_batch_size: float = 1.0
@@ -2431,7 +2434,7 @@ class SortingDemo:
         with self.state_lock:
             self._update_belt()
             active_parts = len(self.spawned - self.placed - self.missed)
-            effective_capacity = 1 if SINGLE_ARM_VALIDATION_MODE else int(self.parameters.max_active_parts)
+            effective_capacity = 1 if SINGLE_ARM_VALIDATION_MODE else len(self.items)
             pending = [
                 item
                 for item in self.items
