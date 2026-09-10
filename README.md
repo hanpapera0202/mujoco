@@ -37,19 +37,21 @@ Nova5 雙手臂流水線分揀的 MuJoCo 場景與中央協調演算法第一版
 & .\.venv\Scripts\python.exe src\run_benchmark.py --seeds 30 --output-dir results\v1
 ```
 
-目前基準版本：`0.26.1`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。最近一次 100-seed 物理驗證與改進方向記錄於 [dual_arm_validation_20260816_zh.md](docs/dual_arm_validation_20260816_zh.md)，本次抓取與碰撞建模驗證見 [v0.25_validation_zh.md](docs/v0.25_validation_zh.md)。
+目前基準版本：`0.37.0`。版本與 Git 推送規範見 [versioning_zh.md](docs/versioning_zh.md)。單臂場景位於 `models/nova5/nova5_single_arm_sorting_line.xml`，可用 `src/run_single_arm_demo.py` 啟動。最近一次 100-seed 物理驗證與改進方向記錄於 [dual_arm_validation_20260816_zh.md](docs/dual_arm_validation_20260816_zh.md)，本次抓取與碰撞建模驗證見 [v0.25_validation_zh.md](docs/v0.25_validation_zh.md)。
 
 基準輸出包含 `events.jsonl`（每次決策與結果）與 `metrics.csv`（漏件率、正確分流率、平均取件時間、近失次數、雙臂同時工作比例）。目前基準使用固定時間模型；下一階段會讓 `run_sorting_line.py` 回傳 MuJoCo 實測事件。
 
 ## MuJoCo 抓取演示
 
-`src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。皮帶有效寬度為 45 cm，固定 seed 的全部工件都從中央共享帶進入，皮帶速度為 `0.12 m/s`；每批預設同時投放 2 件，GUI 可調整批次數量及投料 X/Y 最小、最大值。兩台 Nova5 基座位於 x = +/-0.58 m。中央協調器安排任務後，手臂以 6D 姿態 IK 依序執行提前準備、跟帶靠近、下降、閉合、抬升、移至托盤、放開與回原位。物體狀態以 500 Hz 讀取，IK 以熱啟動 25 Hz 更新；閉爪期間仍沿皮帶追蹤。只有 MuJoCo 回報雙側指墊實體接觸才算抓取成功，成功後由控制器保持物體在測量夾爪姿態，進入放置區開爪後才交回 MuJoCo 物理；放置仍必須由工件最後落入目標托盤驗證。
+`src/run_sorting_demo.py` 是建置展示用的 10 件連續投料場景。皮帶有效寬度為 45 cm，固定 seed 的全部工件都從中央共享帶進入；每批預設投放 1 件，GUI 可調整批次數量及投料 X/Y 最小、最大值。兩台 Nova5 基座位於 x = +/-0.58 m。中央協調器安排任務後，低階雙臂協同層先處理 frame/軌跡，再由 QP-RRIK 依序執行提前準備、跟帶靠近、下降、閉合、抬升、移至托盤、放開與回原位。物體狀態以 500 Hz 讀取，IK 以熱啟動 25 Hz 更新；閉爪期間仍沿皮帶追蹤。只有 MuJoCo 回報雙側指墊實體接觸才算抓取成功，成功後由控制器保持物體在測量夾爪姿態，進入放置區開爪後才交回 MuJoCo 物理；放置仍必須由工件最後落入目標托盤驗證。
 
 目前演算法名稱為 **BC-GP-JSP（Bayesian Centralized Genetic-Particle Joint Strategy Planner，貝式集中遺傳粒子聯合策略規劃）**。CSPR 保留為低成本硬條件快篩；GA 選擇雙臂離散任務與路徑組合，PSO 微調平行運動權重，再由原有 QP-RRIK 執行。原有 9 組聯合策略與碰撞預檢仍保留，控制台可調碰撞警戒盒的外擴距離，預設仍為 10 cm；實體碰撞盒不會隨之縮放。
 
 啟動演示後，瀏覽器會開啟 `http://127.0.0.1:8765`。控制台可開始、暫停、重播、開啟或重新顯示 MuJoCo、修改 seed、調整皮帶/演示速度、碰撞警戒外擴距離與中央協調器參數，並查看 9 組聯合策略的選擇結果、後驗完工機率、A/B 任務、拒絕原因與事件紀錄。關閉 MuJoCo 視窗後，控制服務仍會保留同一場演示，按「開始 / 繼續」即可重新開啟。MuJoCo 視窗聚焦後按 `R` 也會重播。
 
 演算法的數學定義、程式對照與參數修改說明位於 [docs/algorithm_math_zh.md](docs/algorithm_math_zh.md)。
+
+論文低階協同架構的完整剖析位於 [paper_machines_12_00387_analysis_zh.md](docs/paper_machines_12_00387_analysis_zh.md)。
 
 ## 專案記憶與防退化
 

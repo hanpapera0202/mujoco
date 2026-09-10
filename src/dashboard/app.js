@@ -37,6 +37,17 @@ function render(state) {
   const check = state.preflight || {};
   document.querySelector('#preflight').textContent = check.status === 'clear' ? `路徑碰撞預檢：通過（${check.object_id} / 手臂 ${check.arm}）` : check.status === 'deferred' ? `路徑碰撞預檢：暫緩，${check.reason}` : '路徑碰撞預檢：等待任務';
   document.querySelector('#algorithm-name').textContent = state.algorithm.name;
+  const lowLevel = state.low_level || {};
+  setRows(document.querySelector('#low-level'), [
+    `<strong>架構</strong><span>論文閉鏈低階層</span><span>${lowLevel.mode === 'closed_chain' ? '共同工件模式' : '獨立物件分揀模式'}</span>`,
+    `<strong>基座校正</strong><span>${lowLevel.calibration_points || 0} 個點</span><span>RMS ${lowLevel.calibration_rms_m == null ? '尚未校正' : `${lowLevel.calibration_rms_m} m`}</span>`,
+    `<strong>Peer target</strong><span>${lowLevel.peer_target_enabled ? '已啟用' : '待共同持物/交接模式'}</span>`
+  ], '低階層等待狀態。');
+  const observation = state.observation || {};
+  const latestObservation = observation.latest || {};
+  const observationRows = Object.entries(latestObservation.arms || {}).map(([arm, value]) => `<strong>手臂 ${arm}</strong><span>${label(value.stage || '待命')} · ${value.object_id || '無任務'}</span><span>關節運動量 ${value.motion_norm.toFixed(3)}</span>`);
+  observationRows.unshift(`<strong>取樣</strong><span>每 ${(observation.period_s || 0.5).toFixed(2)} s</span><span>已記錄 ${observation.frames || 0} 幀</span>`);
+  setRows(document.querySelector('#observation'), observationRows, '尚無低頻觀測。');
   const joint = state.joint_plan || {};
   const jointRows = joint.status === 'selected' ? [
     `<strong>聯合策略</strong><span>A=${joint.route_a} · B=${joint.route_b}</span><span>評估 ${joint.evaluated} 組</span>`,

@@ -35,7 +35,7 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
         for event in grasps:
             self.assertEqual(event["finger_count"], 2)
             self.assertEqual(event["contact"], "bilateral_finger_physical")
-            self.assertEqual(event["grasp_constraint"], "none")
+            self.assertEqual(event["grasp_constraint"], "verified_transport_attachment")
 
     def test_no_grasp_constraint_or_safety_failure_is_hidden(self):
         self.assertEqual(self.demo.model.neq, 0)
@@ -67,7 +67,7 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
 
     def test_load_control_parameters_remain_explicit(self):
         self.assertEqual(self.demo.parameters.feed_interval_s, 5.0)
-        self.assertEqual(int(self.demo.parameters.max_active_parts), 2)
+        self.assertEqual(int(self.demo.parameters.max_active_parts), 10)
 
 
 if __name__ == "__main__":

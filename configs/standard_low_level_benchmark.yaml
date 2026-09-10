@@ -1,0 +1,56 @@
+standard:
+  id: paper-low-level-seed42
+  version: 0.37.0
+  purpose: 可重現的論文低階雙臂協同基線，不代表已達成率標
+  seed: 42
+  duration_s: 60
+
+planner:
+  high_level: BC-GP-JSP
+  fast_filter: CSPR
+  low_level: paper_closed_chain_low_level
+  ik: qp_rrik
+  arm_policy: equal_peer_centralized
+  ordinary_pick_mode: independent_pick
+  shared_workpiece_mode: closed_chain
+
+conveyor:
+  belt_speed_mps: 0.09
+  feed_interval_s: 5.0
+  feed_batch_size: 1
+  max_active_parts: 10
+  feed_x_range_m: [-0.03, 0.03]
+  feed_y_range_m: [1.15, 1.25]
+
+control:
+  mujoco_timestep_s: 0.002
+  control_hz: 500
+  tracking_ik_hz: 25
+  safety_prediction_hz: 50
+  warning_margin_m: 0.10
+  max_viewer_substeps: 8
+
+acceptance:
+  required:
+    - no_nan_inf_qacc
+    - no_arm_arm_collision
+    - no_arm_body_or_floor_forbidden_contact
+    - bilateral_finger_contact_before_grasp_event
+    - release_only_inside_target_tray
+    - low_level_mode_is_reported
+  research_targets:
+    placed_ratio_at_least: 0.80
+    missed_count_at_most: 2
+    safety_stop_count: 0
+
+last_observed_seed42_window:
+  simulated_time_s: 38.94
+  spawned: 8
+  placed: 2
+  missed: 1
+  active_parts: 5
+  arm_a_grasped: 1
+  arm_b_grasped: 1
+  path_reject_events: 3
+  path_abort_events: 1
+  status: needs_motion_model_fix

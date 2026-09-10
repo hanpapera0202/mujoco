@@ -70,6 +70,7 @@ class DashboardViewerControlTests(unittest.TestCase):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="open-mujoco"', html)
         self.assertIn("開啟 / 顯示 MuJoCo", html)
+        self.assertIn("低頻運行觀測", html)
 
     def test_visible_demo_settings_action_reaches_the_simulator(self):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")

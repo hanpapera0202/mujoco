@@ -33,6 +33,7 @@ class JointStrategyEvidence:
     grasp_probability_b: float
     rejection_reason: str = ""
     warning_overlap_ratio: float = 0.0
+    smoothness_cost: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class BayesianJointGame:
             - 0.25 * evidence.path_length_rad
             - 400.0 * collision_probability
             - 180.0 * evidence.warning_overlap_ratio
+            - 0.10 * evidence.smoothness_cost
         )
         return JointStrategyScore(evidence, completion_probability, collision_probability, expected_utility)
 

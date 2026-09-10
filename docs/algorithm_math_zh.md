@@ -1,6 +1,62 @@
 # 中央協調演算法：數學、程式與修改指南
 
-這份文件描述 **BC-JSP（Bayesian Centralized Joint Strategy Planner，貝式集中聯合策略規劃）**。CSPR 仍負責低成本快篩，BC-JSP 再處理兩臂聯合路徑。所有手臂在中央端平權，不存在主從關係。
+這份文件描述 **BC-JSP（Bayesian Centralized Joint Strategy Planner，貝式集中聯合策略規劃）** 的高階任務層，以及論文衍生的低階雙臂運動協同層。CSPR 仍負責低成本快篩，BC-JSP 再處理兩臂聯合路徑，低階層負責校正、位姿轉換、軌跡離散與 QP-RRIK 前的運動限制。所有手臂在中央端平權，不存在主從關係。
+
+低階入口是 `src/closed_chain_kinematics.py::DualArmLowLevelLayer`。它不負責決定
+「哪一隻手臂拿哪一件」，而是接收中央層已選好的目標，輸出可交給關節控制器和
+MuJoCo 預檢的同步位姿序列。這個分層讓論文的閉鏈數學成為真正的 low-level
+架構，而不是另一個高階派工器。
+
+## v0.37 論文方法的可選閉鏈層
+
+本版吸收使用者提供的 Machines 2024 論文 *Research on Collaboration Motion
+Planning Method for a Dual-Arm Robot Based on Closed-Chain Kinematics*，但只引入
+適合本專案的數學元件。論文的工作物雙臂共同持有，是嚴格的剛體閉鏈；目前產線
+通常是兩隻手臂各抓一個不同物件，因此不能把兩臂強制綁成一個閉鏈，否則會把
+「平行分揀」錯誤地改成「共同夾持」。
+
+### 1. 三點基座校正
+
+讓兩臂末端依序接觸三個不共線的空間點。正運動學得到同一點在兩個基座的
+座標集合：
+
+$$P_i^A = T_A^B P_i^B,qquad i\in\{1,2,3\}.$$ 
+
+程式以 Kabsch/SVD 求解帶平移的 $T_A^B$，並允許多於三點來平均量測噪聲：
+`src/closed_chain_kinematics.py::estimate_rigid_transform`。它比直接把 XML
+中兩個 base 的位置當作真值更適合之後接真實控制器，也能把「兩臂各自 IK
+看似可行、轉到世界座標後卻不一致」變成可量測的校正誤差。
+
+### 2. 共同物件的位姿約束
+
+以 $T_W^{E_A}$ 表示 A 末端在世界座標的位姿，$T_{E_A}^{P}$ 表示 A 工具到
+共同物件的固定安裝關係，$T_{E_B}^{P}$ 表示 B 工具到共同物件的固定安裝關係，
+則 B 的期望末端位姿為：
+
+$$T_W^{E_B}=T_W^{E_A}T_{E_A}^{P}(T_{E_B}^{P})^{-1}.$$ 
+
+實作在 `ClosedChainKinematics.peer_tool_pose`，並以平移誤差與旋轉角誤差
+作為回授：
+
+$$e_{cc}=\left(\|p_B-\hat p_B\|_2,
+\cos^{-1}\frac{\operatorname{tr}(R_B\hat R_B^T)-1}{2}\right).$$
+
+這個層目前是「共同持物/交接」的可選約束與診斷，不會套到兩個獨立輸送帶物件。
+中央協調器仍然同時評估 A、B 候選，沒有固定主臂或副臂。
+
+### 3. 軌跡離散與平滑成本
+
+論文將連續工作曲線離散成控制器可執行的點，並以梯形速度避免轉折衝擊。本版
+保留現有路徑離散流程，另外用五次時間尺度：
+
+$$s(\tau)=10\tau^3-15\tau^4+6\tau^5,quad 0\leq\tau\leq1,$$
+
+使端點速度與加速度為零。聯合候選另計：
+
+$$C_{smooth}=\overline{\|\dot q\|_2}+0.25\,\overline{\|\ddot q\|_2}.$$
+
+這是軟成本，會輕微降低抖動/急轉的候選效用；任何實體碰撞、關節越界、錯誤
+接觸仍直接淘汰，不能用平滑度換取安全。
 
 ## v0.6 不完全資訊貝式博弈
 

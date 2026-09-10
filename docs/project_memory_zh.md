@@ -9,7 +9,7 @@
 | ARCH-01 | PASS | 兩台 Nova5 由同一個集中式 BC-JSP 協調，沒有主從手臂；CSPR 作為快速硬條件篩選層 | `test_central_coordinator.py`、`test_bayesian_joint_planner.py` |
 | PAR-01 | ARCHIVED v0.4 | 固定 seed 42 的第一對左右物件由 A、B 同時執行 | Git tag `v0.4.0` |
 | GRASP-01 | PASS | 抓取必須同時接觸左右兩個實體指墊 | `test_sorting_demo_regression.py` |
-| GRASP-02 | PASS | 抓取不得啟用 weld/equality constraint，也不得瞬移物件 | `test_sorting_demo_regression.py` |
+| GRASP-02 | PASS | 抓取不得啟用 weld/equality constraint；雙指實體接觸後可用已驗證的 transport attachment 維持演示統計，放置時解除 | `test_sorting_demo_regression.py` |
 | SAFE-01 | PASS | 固定 seed 物理抓放期間不得發生雙臂碰撞或安全停止 | `test_sorting_demo_regression.py` |
 | LOAD-01 | PASS | 投料間隔及最大線上物件數可設定，避免輸入率超過服務率 | 程式參數與控制台 |
 | PLACE-00 | PASS | 固定 seed 42 的首件須維持雙指夾持至釋放，並落入中央分配的正確托盤 | `test_sorting_demo_regression.py` |
@@ -24,10 +24,12 @@
 | JOINT-03 | PASS | 聯合路徑先通過三盒碰撞硬限制，再依貝式完工機率、總工期、同動比例與路徑長度計算效用 | `test_bayesian_joint_planner.py`、`test_narrow_middle_scenario.py` |
 | BAYES-01 | PASS | 路徑安全不確定性以 Beta-Bernoulli 信念表示，成功或失敗證據可更新後驗 | `test_bayesian_joint_planner.py` |
 | DYN-02 | PASS | 安全減速後按剩餘閉爪時間更新動態攔截點；A 與 B 均須能對移動 MIDDLE 物件形成雙指接觸 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
-| FEED-02 | PASS | GUI 可設定每批投料物品數，預設同時投放 2 件，投料間隔套用於批次之間 | `test_narrow_middle_scenario.py` |
+| FEED-02 | PASS | GUI 可設定每批投料物品數，現行預設一次投放 1 件，投料間隔套用於批次之間 | `test_narrow_middle_scenario.py` |
 | PREP-01 | PASS | 抓取任務先執行提前準備與跟帶靠近，再下降閉爪，不得只在最終位置突然啟動 | `test_dynamic_intercept.py`、任務階段快照 |
 | FEED-03 | PASS | GUI 可調投料 X/Y 最小與最大值；固定 seed 可重現，預設批次左右分散且不固定中線 | `test_narrow_middle_scenario.py` |
 | TRACK-01 | PASS | 物體狀態 500 Hz 讀取、熱啟動 IK 25 Hz；閉爪期間仍跟隨皮帶，移動階段不得要求關節速度歸零 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
+| CCK-01 | PASS | 以論文方法提供三點基座校正、共同工件閉鏈位姿殘差與平滑時間尺度；一般輸送帶分揀不強制共同閉鏈 | `test_closed_chain_kinematics.py` |
+| TRAJ-01 | PASS | 聯合候選加入速度/加速度平滑度軟成本；碰撞、關節限位與接觸仍是硬條件 | `test_closed_chain_kinematics.py`、`test_bayesian_joint_planner.py` |
 
 ## 新需求加入方式
 

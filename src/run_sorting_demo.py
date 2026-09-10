@@ -21,6 +21,7 @@ import numpy as np
 
 from central_coordinator import ArmId, ArmState, Candidate, CentralCoordinator, ObjectClass, ObjectObservation
 from bayesian_joint_planner import BayesianJointGame, JointStrategyEvidence
+from closed_chain_kinematics import DualArmLowLevelLayer, joint_smoothness_cost
 from run_sorting_line import (
     BELT_SPEED_MPS,
     CONVEYOR_LOOP_LENGTH_M,
@@ -57,6 +58,7 @@ TRACKING_IK_MIN_TARGET_DELTA_M = 0.003
 # joint-limit branch before it can replace that verified route.
 TRACKING_IK_MAX_POSITION_RESIDUAL_M = 0.25
 SAFETY_CHECK_PERIOD_S = 0.02
+OBSERVATION_PERIOD_S = 0.50
 MAX_VIEWER_SUBSTEPS = 8
 # The executor also enforces the 10 cm live warning envelope.  Keep the
 # scheduled handoff short enough that a waiting peer can still intercept a
@@ -472,6 +474,7 @@ class SortingDemo:
         self.data = mujoco.MjData(self.model)
         self.seed = seed
         self.algorithm_id = CSPR_ALGORITHM_ID
+        self.low_level = DualArmLowLevelLayer()
         self.parameters = parameters or DemoParameters()
         self.state_lock = threading.RLock()
         self.reset_requested = threading.Event()
@@ -543,6 +546,8 @@ class SortingDemo:
         self.latest_decision = {"assignments": [], "rejected": {}}
         self.last_preflight = {"status": "pending", "reason": "waiting_for_task"}
         self.latest_joint_plan = {"status": "pending", "evaluated": 0}
+        self.observation_trace: list[dict[str, object]] = []
+        self.next_observation_s = 0.0
         # Preserve learned route beliefs across GUI replay/settings changes;
         # constructing a new SortingDemo still starts from the documented prior.
         if not hasattr(self, "bayesian_game"):
@@ -679,6 +684,7 @@ class SortingDemo:
                 "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
                 "execution_mode": "single_arm_predictive_validation" if SINGLE_ARM_VALIDATION_MODE else "centralized_dual_arm",
                 "ik_solver": {"id": IK_SOLVER_ID, "name": IK_SOLVER_NAME},
+                "low_level": self.low_level.snapshot(),
                 "time_s": round(float(self.data.time), 3),
                 "paused": self.paused,
                 "viewer": {
@@ -709,8 +715,35 @@ class SortingDemo:
                     "warning_margin_m": round(float(self.parameters.warning_margin_m), 3),
                     "mode": "single_arm_validation" if SINGLE_ARM_VALIDATION_MODE else "concurrent_mission_preflight",
                 },
+                "observation": {
+                    "period_s": OBSERVATION_PERIOD_S,
+                    "frames": len(self.observation_trace),
+                    "latest": self.observation_trace[-1] if self.observation_trace else None,
+                },
                 "events": self.event_log[-12:],
             }
+
+    def _record_low_rate_observation(self) -> None:
+        """Record a cheap state trace without rendering every MuJoCo step."""
+
+        if self.data.time + 1e-9 < self.next_observation_s:
+            return
+        arms = {}
+        for arm, kin in self.kinematics.items():
+            mission = self.missions.get(arm)
+            arms[arm.value] = {
+                "stage": None if mission is None else mission.keyframes[min(mission.keyframe_index, len(mission.keyframes) - 1)][0],
+                "object_id": None if mission is None else mission.object_id,
+                "qpos": np.round(self.data.qpos[kin.qpos_addresses], 4).tolist(),
+                "grasp_xyz": np.round(kin.grasp_position(), 4).tolist(),
+                "motion_norm": round(float(np.linalg.norm(self.data.qvel[kin.dof_addresses])), 4),
+                "preparation_only": False if mission is None else mission.preparation_only,
+            }
+        self.observation_trace.append({"time_s": round(float(self.data.time), 3), "arms": arms})
+        # Keep enough history for a low-rate inspection window without
+        # allowing a long GUI session to grow memory without a bound.
+        del self.observation_trace[:-2400]
+        self.next_observation_s = self.data.time + OBSERVATION_PERIOD_S
 
     def _log(self, event: str, **fields: object) -> None:
         entry = {"time_s": round(float(self.data.time), 3), "event": event, **fields}
@@ -963,6 +996,7 @@ class SortingDemo:
         end_s = max(first.trajectory[-1][0], second.trajectory[-1][0])
         times = np.arange(start_s, end_s + 0.001, 0.10)
         previous: dict[ArmId, np.ndarray] = {}
+        samples: dict[ArmId, list[np.ndarray]] = {ArmId.A: [], ArmId.B: []}
         moving_together = 0
         path_length = 0.0
         for at_s in times:
@@ -974,8 +1008,13 @@ class SortingDemo:
                 path_length += delta
                 moving[mission.arm] = delta > 1e-4
                 previous[mission.arm] = qpos
+                samples[mission.arm].append(qpos.copy())
             moving_together += int(all(moving.values()))
         simultaneous_ratio = moving_together / max(1, len(times) - 1)
+        smoothness_cost = sum(
+            joint_smoothness_cost(np.asarray(samples[arm]), 0.10)
+            for arm in (ArmId.A, ArmId.B)
+        )
         grasp = {
             arm: (self.arm_outcomes[arm]["grasped"] + 1.0) / (self.arm_outcomes[arm]["attempts"] + 2.0)
             for arm in ArmId
@@ -992,6 +1031,7 @@ class SortingDemo:
             grasp_probability_b=grasp[ArmId.B],
             rejection_reason="" if safe else reason,
             warning_overlap_ratio=warning_overlap_ratio,
+            smoothness_cost=smoothness_cost,
         )
 
     def _joint_warning_overlap_ratio(self, first: ArmMission, second: ArmMission) -> float:
@@ -1748,6 +1788,7 @@ class SortingDemo:
             "makespan_s": round(chosen.makespan_s, 3),
             "simultaneous_ratio": round(chosen.simultaneous_ratio, 4),
             "path_length_rad": round(chosen.path_length_rad, 3),
+            "smoothness_cost": round(chosen.smoothness_cost, 3),
         }
         self._log("joint_plan", **self.latest_joint_plan)
 
@@ -2149,14 +2190,22 @@ class SortingDemo:
                 lead = None
                 if mission.handoff_lead_assignment is not None:
                     lead = self.missions.get(mission.handoff_lead_assignment.arm)
-                if (
-                    mission.lead_started
-                    and lead is not None
-                    and lead.grasped
-                    and mission.keyframes[-1][0] == "handoff_ready"
-                ):
-                    self._start_handoff_creep(mission)
-                    continue
+                if mission.lead_started and lead is not None:
+                    if lead.grasped:
+                        assignment = mission.handoff_assignment
+                        if assignment is not None:
+                            self.missions.pop(arm, None)
+                            self._log("handoff_ready", object_id=assignment.object_id, arm=arm.value)
+                            if not self._start_assignment(assignment):
+                                self.deferred_assignments[arm] = assignment
+                            continue
+                    elif mission.keyframes[-1][0] == "handoff_ready":
+                        # Move toward the predicted pre-grasp pose before the
+                        # lead has finished.  The creep path is still screened
+                        # against the lead, but it no longer waits for the
+                        # lead's grasp event to begin any useful motion.
+                        self._start_handoff_creep(mission)
+                        continue
                 target = mission.keyframes[-1][2]
                 kin.command_joint_pose(target, GRIP_OPEN_M)
                 mission.last_safe_qpos = target.copy()
@@ -2529,6 +2578,7 @@ class SortingDemo:
             self._update_missions()
             mujoco.mj_step(self.model, self.data)
             self._sync_attached_payloads()
+            self._record_low_rate_observation()
             contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
                 self._recover_last_safe_poses()

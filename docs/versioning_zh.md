@@ -12,4 +12,4 @@
 
 其中 `<scope>` 可為 `sim`、`planner`、`grasp`、`model`、`dashboard`、`docs` 或 `build`。發布版本時必須建立並推送同名 Git tag，例如 `v0.2.0`。
 
-目前版本 `0.14.0` 延續 `CR-RRIK` 與雙臂 handoff 安全流程，新增獨立單臂場景。`nova5_single_arm_sorting_line.xml` 移除 B 臂、B 臂致動器/感測器與右側出料盤，但保留 8 節物理輸送帶、斜坡投料、動態物件、A 臂夾爪與左側出料盤；`run_single_arm_demo.py` 可直接啟動單臂 MuJoCo 演示。
+目前版本 `0.37.0` 延續中央 BC-GP-JSP 與 QP-RRIK，新增以閉鏈運動學為基礎的低階雙臂協同層、三點基座校正、同步姿態採樣與平滑成本。獨立單臂場景仍位於 `nova5_single_arm_sorting_line.xml`，可用 `run_single_arm_demo.py` 啟動。

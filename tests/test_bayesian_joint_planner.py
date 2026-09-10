@@ -40,6 +40,13 @@ class BayesianJointPlannerTests(unittest.TestCase):
         game.update("direct", "outer", False)
         self.assertLess(game.belief_for("direct", "outer").mean, before)
 
+    def test_smoothness_is_a_soft_preference_after_hard_safety(self):
+        game = BayesianJointGame()
+        rough = evidence(route_a="direct", route_b="balanced", smoothness_cost=10.0)
+        smooth = evidence(route_a="balanced", route_b="direct", smoothness_cost=0.0)
+        selected = game.choose([rough, smooth])
+        self.assertEqual((selected.evidence.route_a, selected.evidence.route_b), ("balanced", "direct"))
+
 
 if __name__ == "__main__":
     unittest.main()
