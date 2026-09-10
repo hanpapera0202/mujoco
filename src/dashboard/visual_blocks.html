@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nova5 視覺化方塊</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    main { grid-template-columns: minmax(150px, 0.35fr) minmax(420px, 1fr) minmax(220px, 0.45fr); }
+    .palette, .workspace, .output { min-height: 72vh; padding: 16px; }
+    .workspace { border: 1px solid #4e665f; background: #131a18; }
+    .block { display: grid; gap: 4px; padding: 12px; margin: 10px 0; border-left: 6px solid #65d7b0; background: #1c2a26; cursor: grab; user-select: none; }
+    .block[data-kind="decision"] { border-left-color: #f0bb4c; background: #302a1a; }
+    .block[data-kind="action"] { border-left-color: #76b8ff; background: #1b2733; }
+    .block small { color: #c3d3cc; }
+    .flow { min-height: 54vh; padding: 10px; border: 1px dashed #6e8b81; }
+    .flow .block::after { content: '↓'; justify-self: center; margin-top: 8px; color: #9bcfbc; font-size: 20px; }
+    .flow .block:last-child::after { content: ''; margin: 0; }
+    textarea { width: 100%; min-height: 260px; box-sizing: border-box; background: #0e1412; color: #d8eee4; border: 1px solid #58736a; padding: 10px; font-family: Consolas, monospace; }
+    .button-link { display: inline-flex; align-items: center; padding: 10px 14px; border: 1px solid #75988c; color: #e5fff3; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header><div><strong>Nova5 視覺化方塊</strong><span>研究流程設定</span></div><a class="button-link" href="index.html">回控制台</a></header>
+  <main>
+    <section class="palette"><h1>方塊庫</h1><div id="palette"></div></section>
+    <section class="workspace"><h1>執行流程</h1><div id="flow" class="flow" aria-label="可排序的研究流程"></div><button id="reset" type="button">還原研究流程</button></section>
+    <section class="output"><h1>VS Code 設定</h1><textarea id="json" readonly></textarea><button id="copy" class="primary" type="button">複製 JSON</button><p id="status" class="settings-status"></p></section>
+  </main>
+  <script src="visual_blocks.js"></script>
+</body>
+</html>

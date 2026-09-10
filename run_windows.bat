@@ -2,8 +2,8 @@
 setlocal
 
 rem Change this path if MuJoCo was extracted elsewhere.
-set "MUJOCO_HOME=C:\mujoco\mujoco-3.11.0-windows-x86_64"
-set "MODEL=%~dp0models\falling_box.xml"
+set "MUJOCO_HOME=C:\mujoco\mujoco-3.11.0"
+set "MODEL=%~dp0models\nova5\nova5_sorting_line.xml"
 
 if not exist "%MUJOCO_HOME%\bin\simulate.exe" (
     echo [ERROR] simulate.exe was not found:
