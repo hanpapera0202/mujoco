@@ -1,6 +1,6 @@
 standard:
   id: paper-low-level-seed42
-  version: 0.38.0
+  version: 0.38.1
   purpose: 可重現的論文低階雙臂協同基線，不代表已達成率標
   seed: 42
   duration_s: 60

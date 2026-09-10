@@ -1,0 +1,36 @@
+{
+  "profile_key": "nova5_fb1s_fast10_v038",
+  "profile_name": "前後分區 1 秒黃燈快速十件基準",
+  "version": "0.38.1",
+  "model": "models\\nova5\\nova5_sorting_line.xml",
+  "seed": 42,
+  "algorithm": "bc_jsp",
+  "parameters": {
+    "horizon_s": 30.0,
+    "parallel_bonus": 2.0,
+    "pick_speed_mps": 0.55,
+    "fixed_cycle_s": 7.0,
+    "urgency_weight": 3.0,
+    "success_weight": 2.0,
+    "travel_weight": 0.25,
+    "belt_speed_mps": 0.09,
+    "feed_interval_s": 5.0,
+    "max_active_parts": 10.0,
+    "simulation_speed": 1.0,
+    "warning_margin_m": 0.05,
+    "collision_priority": "progress_first",
+    "feed_batch_size": 1.0,
+    "feed_x_min_m": -0.03,
+    "feed_x_max_m": 0.03,
+    "feed_y_min_m": 1.15,
+    "feed_y_max_m": 1.25,
+    "peer_belt_entry_deadline_s": 0.8,
+    "peer_motion_speed_scale": 0.6
+  },
+  "reproducibility": {
+    "deterministic_seed": true,
+    "feed_is_one_item_per_interval": true,
+    "shared_zone_clear_delay_s": 1.0,
+    "shared_zone_split_y_m": 0.25
+  }
+}

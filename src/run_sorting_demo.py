@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import copy
 import ctypes
+import json
 import random
+import re
 import sys
 import threading
 import time
@@ -160,6 +162,11 @@ class DemoParameters:
 
 CSPR_ALGORITHM_ID = "bc_jsp"
 CSPR_ALGORITHM_NAME = "BC-GP-JSP - Bayesian Centralized Genetic-Particle Joint Strategy Planner"
+PROFILE_VERSION = "0.38.1"
+DEFAULT_PROFILE_KEY = "nova5_fb1s_fast10_v038"
+DEFAULT_PROFILE_NAME = "前後分區 1 秒黃燈快速十件基準"
+PROFILE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+PROFILE_DIRECTORY = SCRIPT_DIR.parent / "configs" / "reproducible_profiles"
 # Normal Nova5 tool frame for travel and tray placement.
 GENERAL_XMAT = np.array(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
 # Reachable top-down frame: local -Z points down to the belt.
@@ -489,7 +496,8 @@ def smoothstep(ratio: float) -> float:
 
 class SortingDemo:
     def __init__(self, model_path: Path, seed: int, parameters: DemoParameters | None = None) -> None:
-        self.model = mujoco.MjModel.from_xml_path(str(model_path))
+        self.model_path = Path(model_path).resolve()
+        self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.model.opt.timestep = CONTROL_STEP_S
         self.geom_descriptions = {
             geom_id: (
@@ -524,6 +532,8 @@ class SortingDemo:
                 self.model.body_gravcomp[body_id] = 1.0
         self.data = mujoco.MjData(self.model)
         self.seed = seed
+        self.profile_key = DEFAULT_PROFILE_KEY
+        self.profile_name = DEFAULT_PROFILE_NAME
         self.algorithm_id = CSPR_ALGORITHM_ID
         self.low_level = DualArmLowLevelLayer()
         self.parameters = parameters or DemoParameters()
@@ -689,9 +699,73 @@ class SortingDemo:
         with self.state_lock:
             self.paused = paused
 
+    @staticmethod
+    def _validate_profile_key(profile_key: object) -> str:
+        value = str(profile_key).strip()
+        if not PROFILE_KEY_PATTERN.fullmatch(value):
+            raise ValueError("profile_key must be 3-64 ASCII letters, digits, '.', '_' or '-'")
+        return value
+
+    @staticmethod
+    def _profile_path(profile_key: str) -> Path:
+        return PROFILE_DIRECTORY / f"{profile_key}.json"
+
+    def _profile_payload(self) -> dict[str, object]:
+        try:
+            model_name = str(self.model_path.relative_to(SCRIPT_DIR.parent))
+        except ValueError:
+            model_name = str(self.model_path)
+        return {
+            "profile_key": self.profile_key,
+            "profile_name": self.profile_name,
+            "version": PROFILE_VERSION,
+            "model": model_name,
+            "seed": int(self.seed),
+            "algorithm": self.algorithm_id,
+            "parameters": asdict(self.parameters),
+            "reproducibility": {
+                "deterministic_seed": True,
+                "feed_is_one_item_per_interval": int(self.parameters.feed_batch_size) == 1,
+                "shared_zone_clear_delay_s": SHARED_ZONE_CLEAR_DELAY_S,
+                "shared_zone_split_y_m": SHARED_ZONE_SPLIT_Y_M,
+            },
+        }
+
+    def _save_profile_file(self) -> Path:
+        path = self._profile_path(self.profile_key)
+        PROFILE_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._profile_payload(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def save_profile(self, profile_key: object) -> Path:
+        """Persist the current deterministic settings under a user-visible key."""
+        with self.state_lock:
+            self.profile_key = self._validate_profile_key(profile_key)
+            if self.profile_key != DEFAULT_PROFILE_KEY:
+                self.profile_name = f"自訂重現：{self.profile_key}"
+            return self._save_profile_file()
+
+    def load_profile(self, profile_key: object) -> Path:
+        """Load a saved key and request a deterministic replay."""
+        key = self._validate_profile_key(profile_key)
+        path = self._profile_path(key)
+        if not path.is_file():
+            raise ValueError(f"找不到重現鍵：{key}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        values = dict(payload.get("parameters", {}))
+        values["seed"] = int(payload["seed"])
+        values["algorithm"] = payload.get("algorithm", CSPR_ALGORITHM_ID)
+        values["profile_key"] = key
+        self.update_settings(values)
+        with self.state_lock:
+            self.profile_name = str(payload.get("profile_name", f"自訂重現：{key}"))
+            self._save_profile_file()
+        return path
+
     def update_settings(self, values: dict[str, object]) -> None:
         """Apply validated dashboard settings at the next deterministic restart."""
         with self.state_lock:
+            profile_key = self._validate_profile_key(values.get("profile_key", self.profile_key))
             if "algorithm" in values:
                 algorithm_id = str(values["algorithm"])
                 if algorithm_id not in (CSPR_ALGORITHM_ID, "cspr"):
@@ -728,6 +802,10 @@ class SortingDemo:
                 raise ValueError("feed Y range must stay within 0.90..1.40 m")
             for field_name, value in candidate_parameters.items():
                 setattr(self.parameters, field_name, value)
+            self.profile_key = profile_key
+            if self.profile_key != DEFAULT_PROFILE_KEY:
+                self.profile_name = f"自訂重現：{self.profile_key}"
+            self._save_profile_file()
         self.request_reset()
 
     def reset_if_requested(self) -> bool:
@@ -755,6 +833,13 @@ class SortingDemo:
             }
             return {
                 "seed": self.seed,
+                "profile": {
+                    "key": self.profile_key,
+                    "name": self.profile_name,
+                    "version": PROFILE_VERSION,
+                    "path": str(self._profile_path(self.profile_key)),
+                    "deterministic": True,
+                },
                 "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
                 "execution_mode": "single_arm_predictive_validation" if SINGLE_ARM_VALIDATION_MODE else "centralized_dual_arm",
                 "ik_solver": {"id": IK_SOLVER_ID, "name": IK_SOLVER_NAME},

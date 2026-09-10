@@ -16,6 +16,7 @@ class FakeDemo:
         self.viewer_requests = 0
         self.paused = True
         self.settings_values = None
+        self.profile_values = []
 
     def request_viewer_open(self):
         self.viewer_requests += 1
@@ -27,8 +28,14 @@ class FakeDemo:
     def update_settings(self, values):
         self.settings_values = values
 
+    def save_profile(self, key):
+        self.profile_values.append(("save", key))
+
+    def load_profile(self, key):
+        self.profile_values.append(("load", key))
+
     def snapshot(self):
-        return {"viewer": {"active": False, "launching": False, "requested": self.viewer_requests > 0}}
+        return {"viewer": {"active": False, "launching": False, "requested": self.viewer_requests > 0}, "profile": {"key": "test_key"}}
 
 
 class DashboardViewerControlTests(unittest.TestCase):
@@ -76,6 +83,10 @@ class DashboardViewerControlTests(unittest.TestCase):
         self.assertIn("離帶後 Peer 時序", html)
         self.assertIn('id="collision-priority"', html)
         self.assertIn("最低運行優先", html)
+        self.assertIn('name="profile_key"', html)
+        self.assertIn('id="save-profile"', html)
+        self.assertIn('id="load-profile"', html)
+        self.assertIn('id="profile-summary"', html)
 
     def test_visible_demo_settings_action_reaches_the_simulator(self):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")
@@ -94,6 +105,23 @@ class DashboardViewerControlTests(unittest.TestCase):
             with urlopen(request, timeout=2):
                 pass
             self.assertEqual(demo.settings_values, values)
+        finally:
+            dashboard.stop()
+
+    def test_profile_save_and_load_actions_reach_the_simulator(self):
+        demo = FakeDemo()
+        dashboard = start_dashboard(demo, port=0)
+        try:
+            for action in ("save_profile", "load_profile"):
+                request = Request(
+                    f"{dashboard.url}/api/control",
+                    data=json.dumps({"action": action, "values": {"profile_key": "test_key"}}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=2):
+                    pass
+            self.assertEqual(demo.profile_values, [("save", "test_key"), ("load", "test_key")])
         finally:
             dashboard.stop()
 

@@ -24,6 +24,13 @@
       <output id="settings-status" class="settings-status" aria-live="polite"></output>
       <p id="viewer-status" class="viewer-status">正在確認 MuJoCo 視窗</p>
       <form id="settings">
+        <h1>重現版本</h1>
+        <label>重現 Key（ASCII）<input name="profile_key" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" required></label>
+        <div class="profile-actions">
+          <button id="save-profile" type="button">儲存此 Key</button>
+          <button id="load-profile" type="button">載入此 Key</button>
+        </div>
+        <output id="profile-status" class="settings-status" aria-live="polite"></output>
         <h1>演示設定</h1>
         <label>隨機種子 Seed<input name="seed" type="number" step="1" required></label>
         <label>演示速度<input name="simulation_speed" type="number" min="0.1" max="4" step="0.1" required></label>
@@ -73,6 +80,7 @@
       <section class="panel"><h2>執行回饋</h2><div id="feedback" class="rows"></div></section>
       <section class="panel"><h2>手臂任務</h2><div id="missions" class="rows"></div><p id="deferred"></p><p id="preflight"></p></section>
       <section class="panel"><h2>目前演算法</h2><div id="algorithm-name"></div><div id="joint-plan" class="rows"></div></section>
+      <section class="panel"><h2>目前重現版本</h2><div id="profile-summary" class="rows"></div></section>
       <section class="panel"><h2>低階雙臂協同層</h2><div id="low-level" class="rows"></div></section>
       <section class="panel"><h2>低頻運行觀測</h2><div id="observation" class="rows"></div></section>
       <section class="panel"><h2>共享皮帶區閘門</h2><div id="shared-zone" class="rows"></div></section>

@@ -15,6 +15,7 @@
 | PLACE-00 | PASS | 固定 seed 42 的首件須維持雙指夾持至釋放，並落入中央分配的正確托盤 | `test_sorting_demo_regression.py` |
 | PLACE-01 | PASS | 演示模式以已驗證雙指接觸後的 transport attachment 維持物件，seed 42 十件皆放入正確托盤 | `standard_low_level_benchmark.yaml`、90 秒 headless 驗證 |
 | GUI-01 | PASS | 中文控制台可開啟或重新開啟對應的 MuJoCo 視窗；開始動作會同時開啟視窗 | `test_demo_dashboard.py` |
+| PROFILE-01 | PASS | GUI 可用 ASCII key 儲存與載入完整 seed/參數設定；`nova5_fb1s_fast10_v038` 可重現 seed 42 的快速十件基準 | `test_demo_dashboard.py`、`configs/reproducible_profiles/` |
 | LINE-01 | PASS | v0.5 產線有效皮帶寬度為 45 cm，兩台 Nova5 基座位於 x = +/-0.38 m、y = 0.15 m | `test_narrow_middle_scenario.py` |
 | ALLOC-01 | PASS | v0.5 的 10 件皆為 MIDDLE；完全同分首件 A 優先，後續按負載維持平行權限 | `test_central_coordinator.py`、`test_narrow_middle_scenario.py` |
 | SAFE-02 | PASS | 每臂以上臂、前臂、夾爪三個長方體作粗略模型；預警外擴可由 GUI 調整且不改實體盒，預設 10 cm | `test_narrow_middle_scenario.py` |

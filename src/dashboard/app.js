@@ -2,6 +2,9 @@ const fields = [...document.querySelectorAll('#settings input')];
 const algorithmSelect = document.querySelector('#algorithm');
 const collisionPrioritySelect = document.querySelector('#collision-priority');
 const settingsStatus = document.querySelector('#settings-status');
+const profileKeyInput = document.querySelector('input[name="profile_key"]');
+const profileStatus = document.querySelector('#profile-status');
+const profileSummary = document.querySelector('#profile-summary');
 let initialized = false;
 const zh = {
   approach: '接近', prepare: '提前準備', track: '跟帶靠近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', settle: '放置穩定', retreat: '撤離', home: '回原位',
@@ -31,7 +34,18 @@ function render(state) {
   const armRows = Object.entries(feedback.arms || {}).map(([arm, value]) => `<strong>手臂 ${arm}</strong><span>週期 ${value.cycle_s.toFixed(2)} s</span><span>抓取 ${value.grasped}/${value.attempts} · 放置 ${value.placed}</span>`);
   armRows.unshift(`<strong>產線負載</strong><span>線上 ${feedback.active_parts ?? 0} 件</span><span>中央週期估計 ${(feedback.cycle_estimate_s ?? 0).toFixed(2)} s</span>`);
   setRows(document.querySelector('#feedback'), armRows, '尚無執行回饋。');
-  if (!initialized) { fields.forEach(field => field.value = field.name === 'seed' ? state.seed : state.parameters[field.name]); algorithmSelect.value = state.algorithm.id; collisionPrioritySelect.value = state.parameters.collision_priority || 'progress_first'; initialized = true; }
+  const profile = state.profile || {};
+  setRows(profileSummary, [
+    `<strong>Key</strong><span>${profile.key || '未命名'}</span><span>${profile.deterministic ? '可重現' : '未確認'}</span>`,
+    `<strong>名稱</strong><span>${profile.name || '未命名'}</span><span>版本 ${profile.version || '未知'}</span>`,
+    `<strong>檔案</strong><span>${profile.path || ''}</span><span></span>`
+  ], '尚未載入重現版本。');
+  if (!initialized) {
+    fields.forEach(field => { field.value = field.name === 'profile_key' ? (profile.key || '') : field.name === 'seed' ? state.seed : state.parameters[field.name]; });
+    algorithmSelect.value = state.algorithm.id;
+    collisionPrioritySelect.value = state.parameters.collision_priority || 'progress_first';
+    initialized = true;
+  }
   const missions = Object.entries(state.missions).map(([arm, task]) => `<strong>手臂 ${arm}</strong><span>${task.object_id} · ${label(task.stage)}</span><span>${label(task.placement_zone)} · ${task.route || 'direct'} · IK更新 ${task.tracking_updates ?? 0}</span>`);
   setRows(document.querySelector('#missions'), missions, '兩台手臂皆可接收任務。');
   document.querySelector('#deferred').textContent = state.deferred.length ? `安全等待：${state.deferred.join('、')} 正等待中央走廊淨空。` : '';
@@ -85,9 +99,23 @@ document.querySelector('#resume').onclick = () => control('start').then(render).
 document.querySelector('#open-mujoco').onclick = () => control('open_mujoco').then(render).catch(error => window.alert(error.message));
 fields.forEach(field => field.addEventListener('input', () => { settingsStatus.textContent = '有尚未套用的變更'; }));
 algorithmSelect.addEventListener('change', () => { settingsStatus.textContent = '有尚未套用的變更'; });
+document.querySelector('#save-profile').onclick = () => {
+  profileStatus.textContent = '正在儲存…';
+  control('save_profile', {profile_key: profileKeyInput.value.trim()}).then(state => { profileStatus.textContent = '已儲存，可用此 Key 重現'; render(state); }).catch(error => { profileStatus.textContent = '儲存失敗'; window.alert(error.message); });
+};
+document.querySelector('#load-profile').onclick = () => {
+  profileStatus.textContent = '正在載入…';
+  control('load_profile', {profile_key: profileKeyInput.value.trim()}).then(async () => {
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const loaded = await (await fetch('/api/state', {cache: 'no-store'})).json();
+    initialized = false;
+    profileStatus.textContent = '已載入，實際模擬已重播';
+    render(loaded);
+  }).catch(error => { profileStatus.textContent = '載入失敗'; window.alert(error.message); });
+};
 document.querySelector('#settings').onsubmit = event => {
   event.preventDefault();
-  const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
+  const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'profile_key' ? field.value.trim() : field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
   values.algorithm = algorithmSelect.value;
   values.collision_priority = collisionPrioritySelect.value;
   settingsStatus.textContent = '正在套用…';

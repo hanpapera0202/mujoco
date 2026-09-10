@@ -70,6 +70,10 @@ def start_dashboard(demo: SortingDemo, host: str = "127.0.0.1", port: int = 8765
                     demo.request_viewer_open()
                 elif action == "settings":
                     demo.update_settings(payload.get("values", {}))
+                elif action == "save_profile":
+                    demo.save_profile(payload.get("values", {}).get("profile_key", ""))
+                elif action == "load_profile":
+                    demo.load_profile(payload.get("values", {}).get("profile_key", ""))
                 else:
                     raise ValueError("unknown action")
                 self._json(HTTPStatus.OK, demo.snapshot())
