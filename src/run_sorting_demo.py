@@ -162,9 +162,10 @@ class DemoParameters:
 
 CSPR_ALGORITHM_ID = "bc_jsp"
 CSPR_ALGORITHM_NAME = "BC-GP-JSP - Bayesian Centralized Genetic-Particle Joint Strategy Planner"
-PROFILE_VERSION = "0.38.1"
+PROFILE_VERSION = "0.38.2"
 DEFAULT_PROFILE_KEY = "nova5_fb1s_fast10_v038"
 DEFAULT_PROFILE_NAME = "前後分區 1 秒黃燈快速十件基準"
+DEFAULT_PROFILE_CONCEPT = "Seed 42；投料間隔 5 秒；皮帶 0.09 m/s；一次一件；前後共享區分段閘門與 1 秒黃燈冷卻；已驗證 10 件全放置。"
 PROFILE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 PROFILE_DIRECTORY = SCRIPT_DIR.parent / "configs" / "reproducible_profiles"
 # Normal Nova5 tool frame for travel and tray placement.
@@ -534,6 +535,7 @@ class SortingDemo:
         self.seed = seed
         self.profile_key = DEFAULT_PROFILE_KEY
         self.profile_name = DEFAULT_PROFILE_NAME
+        self.profile_concept = DEFAULT_PROFILE_CONCEPT
         self.algorithm_id = CSPR_ALGORITHM_ID
         self.low_level = DualArmLowLevelLayer()
         self.parameters = parameters or DemoParameters()
@@ -710,6 +712,47 @@ class SortingDemo:
     def _profile_path(profile_key: str) -> Path:
         return PROFILE_DIRECTORY / f"{profile_key}.json"
 
+    @staticmethod
+    def _validate_profile_concept(profile_concept: object) -> str:
+        value = str(profile_concept).strip()
+        if not value:
+            raise ValueError("儲存重現 Key 時請輸入核心概念")
+        if len(value) > 500:
+            raise ValueError("核心概念請控制在 500 字以內")
+        return value
+
+    @staticmethod
+    def _profile_record(path: Path) -> dict[str, object] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            key = str(payload.get("profile_key") or path.stem)
+            if not PROFILE_KEY_PATTERN.fullmatch(key):
+                return None
+            parameters = payload.get("parameters", {})
+            return {
+                "key": key,
+                "name": str(payload.get("profile_name", f"自訂重現：{key}")),
+                "concept": str(payload.get("profile_concept", "尚未填寫核心概念")),
+                "version": str(payload.get("version", "unknown")),
+                "seed": int(payload.get("seed", 0)),
+                "feed_interval_s": parameters.get("feed_interval_s"),
+                "belt_speed_mps": parameters.get("belt_speed_mps"),
+                "modified_time_s": path.stat().st_mtime,
+            }
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def list_profiles() -> list[dict[str, object]]:
+        if not PROFILE_DIRECTORY.exists():
+            return []
+        records = [
+            record
+            for record in (SortingDemo._profile_record(path) for path in PROFILE_DIRECTORY.glob("*.json"))
+            if record is not None
+        ]
+        return sorted(records, key=lambda record: (-float(record["modified_time_s"]), str(record["key"])))
+
     def _profile_payload(self) -> dict[str, object]:
         try:
             model_name = str(self.model_path.relative_to(SCRIPT_DIR.parent))
@@ -718,6 +761,7 @@ class SortingDemo:
         return {
             "profile_key": self.profile_key,
             "profile_name": self.profile_name,
+            "profile_concept": self.profile_concept,
             "version": PROFILE_VERSION,
             "model": model_name,
             "seed": int(self.seed),
@@ -737,13 +781,30 @@ class SortingDemo:
         path.write_text(json.dumps(self._profile_payload(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return path
 
-    def save_profile(self, profile_key: object) -> Path:
+    def save_profile(self, profile_key: object, profile_concept: object) -> Path:
         """Persist the current deterministic settings under a user-visible key."""
         with self.state_lock:
             self.profile_key = self._validate_profile_key(profile_key)
+            self.profile_concept = self._validate_profile_concept(profile_concept)
             if self.profile_key != DEFAULT_PROFILE_KEY:
                 self.profile_name = f"自訂重現：{self.profile_key}"
             return self._save_profile_file()
+
+    def delete_profile(self, profile_key: object) -> Path:
+        """Remove a saved profile key without touching the current simulation."""
+        key = self._validate_profile_key(profile_key)
+        if key == DEFAULT_PROFILE_KEY:
+            raise ValueError("基準重現 Key 不可刪除")
+        path = self._profile_path(key)
+        if not path.is_file():
+            raise ValueError(f"找不到重現鍵：{key}")
+        path.unlink()
+        with self.state_lock:
+            if self.profile_key == key:
+                self.profile_key = DEFAULT_PROFILE_KEY
+                self.profile_name = DEFAULT_PROFILE_NAME
+                self.profile_concept = DEFAULT_PROFILE_CONCEPT
+        return path
 
     def load_profile(self, profile_key: object) -> Path:
         """Load a saved key and request a deterministic replay."""
@@ -759,13 +820,15 @@ class SortingDemo:
         self.update_settings(values)
         with self.state_lock:
             self.profile_name = str(payload.get("profile_name", f"自訂重現：{key}"))
-            self._save_profile_file()
+            self.profile_concept = str(payload.get("profile_concept", "尚未填寫核心概念"))
         return path
 
     def update_settings(self, values: dict[str, object]) -> None:
         """Apply validated dashboard settings at the next deterministic restart."""
         with self.state_lock:
             profile_key = self._validate_profile_key(values.get("profile_key", self.profile_key))
+            if "profile_concept" in values and str(values["profile_concept"]).strip():
+                self.profile_concept = str(values["profile_concept"]).strip()[:500]
             if "algorithm" in values:
                 algorithm_id = str(values["algorithm"])
                 if algorithm_id not in (CSPR_ALGORITHM_ID, "cspr"):
@@ -805,7 +868,6 @@ class SortingDemo:
             self.profile_key = profile_key
             if self.profile_key != DEFAULT_PROFILE_KEY:
                 self.profile_name = f"自訂重現：{self.profile_key}"
-            self._save_profile_file()
         self.request_reset()
 
     def reset_if_requested(self) -> bool:
@@ -836,10 +898,12 @@ class SortingDemo:
                 "profile": {
                     "key": self.profile_key,
                     "name": self.profile_name,
+                    "concept": self.profile_concept,
                     "version": PROFILE_VERSION,
                     "path": str(self._profile_path(self.profile_key)),
-                    "deterministic": True,
+                    "deterministic": self._profile_path(self.profile_key).is_file(),
                 },
+                "profile_library": self.list_profiles(),
                 "algorithm": {"id": self.algorithm_id, "name": CSPR_ALGORITHM_NAME},
                 "execution_mode": "single_arm_predictive_validation" if SINGLE_ARM_VALIDATION_MODE else "centralized_dual_arm",
                 "ik_solver": {"id": IK_SOLVER_ID, "name": IK_SOLVER_NAME},

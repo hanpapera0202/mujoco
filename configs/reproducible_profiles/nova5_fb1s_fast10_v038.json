@@ -1,7 +1,8 @@
 {
   "profile_key": "nova5_fb1s_fast10_v038",
   "profile_name": "前後分區 1 秒黃燈快速十件基準",
-  "version": "0.38.1",
+  "profile_concept": "Seed 42；投料間隔 5 秒；皮帶 0.09 m/s；一次一件；前後共享區分段閘門與 1 秒黃燈冷卻；已驗證 10 件全放置。",
+  "version": "0.38.2",
   "model": "models\\nova5\\nova5_sorting_line.xml",
   "seed": 42,
   "algorithm": "bc_jsp",

@@ -25,10 +25,17 @@
       <p id="viewer-status" class="viewer-status">正在確認 MuJoCo 視窗</p>
       <form id="settings">
         <h1>重現版本</h1>
+        <label>選擇已儲存 Key
+          <select id="profile-select" aria-label="選擇已儲存重現 Key"></select>
+        </label>
+        <div id="profile-key-list" class="profile-key-list" aria-label="已儲存 Key 清單"></div>
         <label>重現 Key（ASCII）<input name="profile_key" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" required></label>
+        <label>核心概念<textarea name="profile_concept" id="profile-concept" rows="3" maxlength="500" required></textarea></label>
+        <p id="profile-concept-preview" class="profile-concept-preview">選擇或滑過 Key 可查看核心概念。</p>
         <div class="profile-actions">
           <button id="save-profile" type="button">儲存此 Key</button>
           <button id="load-profile" type="button">載入此 Key</button>
+          <button id="delete-profile" type="button">刪除此 Key</button>
         </div>
         <output id="profile-status" class="settings-status" aria-live="polite"></output>
         <h1>演示設定</h1>

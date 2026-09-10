@@ -1,10 +1,14 @@
-const fields = [...document.querySelectorAll('#settings input')];
+const fields = [...document.querySelectorAll('#settings input, #settings textarea')];
 const algorithmSelect = document.querySelector('#algorithm');
 const collisionPrioritySelect = document.querySelector('#collision-priority');
 const settingsStatus = document.querySelector('#settings-status');
 const profileKeyInput = document.querySelector('input[name="profile_key"]');
+const profileConceptInput = document.querySelector('textarea[name="profile_concept"]');
+const profileSelect = document.querySelector('#profile-select');
+const profileKeyList = document.querySelector('#profile-key-list');
 const profileStatus = document.querySelector('#profile-status');
 const profileSummary = document.querySelector('#profile-summary');
+const profileConceptPreview = document.querySelector('#profile-concept-preview');
 let initialized = false;
 const zh = {
   approach: '接近', prepare: '提前準備', track: '跟帶靠近', descend: '下降', close: '夾爪閉合', lift: '抬升', to_bin: '移往托盤', lower: '放下', open: '夾爪張開', settle: '放置穩定', retreat: '撤離', home: '回原位',
@@ -24,6 +28,58 @@ function setRows(element, rows, empty) {
   if (!rows.length) { element.textContent = empty; return; }
   rows.forEach(row => { const item = document.createElement('div'); item.className = 'row'; item.innerHTML = row; element.append(item); });
 }
+function profileLabel(record) {
+  const parts = [];
+  if (record.feed_interval_s != null) parts.push(`間隔 ${Number(record.feed_interval_s).toFixed(1)}s`);
+  if (record.belt_speed_mps != null) parts.push(`皮帶 ${Number(record.belt_speed_mps).toFixed(2)}m/s`);
+  return parts.length ? `${record.key}（${parts.join(' · ')}）` : record.key;
+}
+function showProfileConcept(record) {
+  profileConceptPreview.textContent = record ? `${record.key}：${record.concept || '尚未填寫核心概念'}` : '選擇或滑過 Key 可查看核心概念。';
+}
+function chooseProfile(record) {
+  if (!record) return;
+  profileKeyInput.value = record.key;
+  profileConceptInput.value = record.concept || '';
+  profileSelect.value = record.key;
+  showProfileConcept(record);
+  settingsStatus.textContent = '已選擇重現 Key，按載入可重播此版本';
+}
+function renderProfileLibrary(state) {
+  const library = state.profile_library || [];
+  const currentKey = (state.profile || {}).key || '';
+  profileSelect.replaceChildren();
+  profileKeyList.replaceChildren();
+  if (!library.length) {
+    const option = document.createElement('option');
+    option.textContent = '尚無已儲存 Key';
+    option.value = '';
+    profileSelect.append(option);
+    profileKeyList.textContent = '尚無已儲存 Key。';
+    return;
+  }
+  library.forEach(record => {
+    const option = document.createElement('option');
+    option.value = record.key;
+    option.textContent = profileLabel(record);
+    option.title = record.concept || '';
+    profileSelect.append(option);
+
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `profile-key-option${record.key === currentKey ? ' active' : ''}`;
+    item.textContent = profileLabel(record);
+    item.title = record.concept || '';
+    item.onmouseenter = () => showProfileConcept(record);
+    item.onclick = () => chooseProfile(record);
+    profileKeyList.append(item);
+  });
+  const requestedKey = profileKeyInput.value.trim() || currentKey;
+  profileSelect.value = library.some(record => record.key === requestedKey) ? requestedKey : currentKey;
+  if (!profileSelect.value) profileSelect.value = library[0].key;
+  const currentRecord = library.find(record => record.key === profileSelect.value);
+  showProfileConcept(currentRecord || null);
+}
 function render(state) {
   document.querySelector('#connection').textContent = state.paused ? '已暫停' : '運行中';
   document.querySelector('#sim-time').textContent = `${state.time_s.toFixed(3)} s`;
@@ -35,13 +91,23 @@ function render(state) {
   armRows.unshift(`<strong>產線負載</strong><span>線上 ${feedback.active_parts ?? 0} 件</span><span>中央週期估計 ${(feedback.cycle_estimate_s ?? 0).toFixed(2)} s</span>`);
   setRows(document.querySelector('#feedback'), armRows, '尚無執行回饋。');
   const profile = state.profile || {};
+  renderProfileLibrary(state);
   setRows(profileSummary, [
     `<strong>Key</strong><span>${profile.key || '未命名'}</span><span>${profile.deterministic ? '可重現' : '未確認'}</span>`,
     `<strong>名稱</strong><span>${profile.name || '未命名'}</span><span>版本 ${profile.version || '未知'}</span>`,
+    `<strong>核心概念</strong><span>${profile.concept || '尚未填寫'}</span><span></span>`,
     `<strong>檔案</strong><span>${profile.path || ''}</span><span></span>`
   ], '尚未載入重現版本。');
   if (!initialized) {
-    fields.forEach(field => { field.value = field.name === 'profile_key' ? (profile.key || '') : field.name === 'seed' ? state.seed : state.parameters[field.name]; });
+    fields.forEach(field => {
+      field.value = field.name === 'profile_key'
+        ? (profile.key || '')
+        : field.name === 'profile_concept'
+          ? (profile.concept || '')
+          : field.name === 'seed'
+            ? state.seed
+            : state.parameters[field.name];
+    });
     algorithmSelect.value = state.algorithm.id;
     collisionPrioritySelect.value = state.parameters.collision_priority || 'progress_first';
     initialized = true;
@@ -99,9 +165,19 @@ document.querySelector('#resume').onclick = () => control('start').then(render).
 document.querySelector('#open-mujoco').onclick = () => control('open_mujoco').then(render).catch(error => window.alert(error.message));
 fields.forEach(field => field.addEventListener('input', () => { settingsStatus.textContent = '有尚未套用的變更'; }));
 algorithmSelect.addEventListener('change', () => { settingsStatus.textContent = '有尚未套用的變更'; });
+profileSelect.addEventListener('change', () => {
+  fetch('/api/state', {cache: 'no-store'})
+    .then(response => response.json())
+    .then(state => chooseProfile((state.profile_library || []).find(record => record.key === profileSelect.value)));
+});
 document.querySelector('#save-profile').onclick = () => {
+  if (!profileConceptInput.value.trim()) {
+    profileStatus.textContent = '請先輸入核心概念';
+    profileConceptInput.focus();
+    return;
+  }
   profileStatus.textContent = '正在儲存…';
-  control('save_profile', {profile_key: profileKeyInput.value.trim()}).then(state => { profileStatus.textContent = '已儲存，可用此 Key 重現'; render(state); }).catch(error => { profileStatus.textContent = '儲存失敗'; window.alert(error.message); });
+  control('save_profile', {profile_key: profileKeyInput.value.trim(), profile_concept: profileConceptInput.value.trim()}).then(state => { initialized = false; profileStatus.textContent = '已儲存，可用此 Key 重現'; render(state); }).catch(error => { profileStatus.textContent = '儲存失敗'; window.alert(error.message); });
 };
 document.querySelector('#load-profile').onclick = () => {
   profileStatus.textContent = '正在載入…';
@@ -113,9 +189,15 @@ document.querySelector('#load-profile').onclick = () => {
     render(loaded);
   }).catch(error => { profileStatus.textContent = '載入失敗'; window.alert(error.message); });
 };
+document.querySelector('#delete-profile').onclick = () => {
+  const key = profileKeyInput.value.trim();
+  if (!key) return;
+  profileStatus.textContent = '正在刪除…';
+  control('delete_profile', {profile_key: key}).then(state => { initialized = false; profileStatus.textContent = `已刪除 ${key}`; render(state); }).catch(error => { profileStatus.textContent = '刪除失敗'; window.alert(error.message); });
+};
 document.querySelector('#settings').onsubmit = event => {
   event.preventDefault();
-  const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'profile_key' ? field.value.trim() : field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
+  const values = Object.fromEntries(fields.map(field => [field.name, field.name === 'profile_key' || field.name === 'profile_concept' ? field.value.trim() : field.name === 'seed' ? Number.parseInt(field.value, 10) : Number.parseFloat(field.value)]));
   values.algorithm = algorithmSelect.value;
   values.collision_priority = collisionPrioritySelect.value;
   settingsStatus.textContent = '正在套用…';

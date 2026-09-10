@@ -28,14 +28,21 @@ class FakeDemo:
     def update_settings(self, values):
         self.settings_values = values
 
-    def save_profile(self, key):
-        self.profile_values.append(("save", key))
+    def save_profile(self, key, concept=""):
+        self.profile_values.append(("save", key, concept))
 
     def load_profile(self, key):
         self.profile_values.append(("load", key))
 
+    def delete_profile(self, key):
+        self.profile_values.append(("delete", key))
+
     def snapshot(self):
-        return {"viewer": {"active": False, "launching": False, "requested": self.viewer_requests > 0}, "profile": {"key": "test_key"}}
+        return {
+            "viewer": {"active": False, "launching": False, "requested": self.viewer_requests > 0},
+            "profile": {"key": "test_key", "concept": "test concept"},
+            "profile_library": [{"key": "test_key", "name": "測試", "concept": "test concept"}],
+        }
 
 
 class DashboardViewerControlTests(unittest.TestCase):
@@ -86,6 +93,10 @@ class DashboardViewerControlTests(unittest.TestCase):
         self.assertIn('name="profile_key"', html)
         self.assertIn('id="save-profile"', html)
         self.assertIn('id="load-profile"', html)
+        self.assertIn('id="delete-profile"', html)
+        self.assertIn('id="profile-select"', html)
+        self.assertIn('id="profile-concept"', html)
+        self.assertIn('id="profile-key-list"', html)
         self.assertIn('id="profile-summary"', html)
 
     def test_visible_demo_settings_action_reaches_the_simulator(self):
@@ -112,16 +123,16 @@ class DashboardViewerControlTests(unittest.TestCase):
         demo = FakeDemo()
         dashboard = start_dashboard(demo, port=0)
         try:
-            for action in ("save_profile", "load_profile"):
+            for action in ("save_profile", "load_profile", "delete_profile"):
                 request = Request(
                     f"{dashboard.url}/api/control",
-                    data=json.dumps({"action": action, "values": {"profile_key": "test_key"}}).encode("utf-8"),
+                    data=json.dumps({"action": action, "values": {"profile_key": "test_key", "profile_concept": "test concept"}}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
                 with urlopen(request, timeout=2):
                     pass
-            self.assertEqual(demo.profile_values, [("save", "test_key"), ("load", "test_key")])
+            self.assertEqual(demo.profile_values, [("save", "test_key", "test concept"), ("load", "test_key"), ("delete", "test_key")])
         finally:
             dashboard.stop()
 
