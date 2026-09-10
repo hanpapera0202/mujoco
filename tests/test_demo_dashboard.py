@@ -71,6 +71,11 @@ class DashboardViewerControlTests(unittest.TestCase):
         self.assertIn('id="open-mujoco"', html)
         self.assertIn("開啟 / 顯示 MuJoCo", html)
         self.assertIn("低頻運行觀測", html)
+        self.assertIn("共享皮帶區閘門", html)
+        self.assertIn('id="shared-zone"', html)
+        self.assertIn("離帶後 Peer 時序", html)
+        self.assertIn('id="collision-priority"', html)
+        self.assertIn("最低運行優先", html)
 
     def test_visible_demo_settings_action_reaches_the_simulator(self):
         html = (ROOT / "src" / "dashboard" / "index.html").read_text(encoding="utf-8")

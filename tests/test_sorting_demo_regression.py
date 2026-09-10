@@ -13,12 +13,19 @@ from run_sorting_demo import ArmId, DemoParameters, SortingDemo
 
 
 class SortingDemoPhysicalRegressionTests(unittest.TestCase):
-    """Protect the first complete seed-42 all-MIDDLE physical cycle."""
+    """Protect the first seed-42 physical cycle while allowing front/back parallelism."""
 
     @classmethod
     def setUpClass(cls):
         model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
-        cls.demo = SortingDemo(model_path, seed=42, parameters=DemoParameters(feed_batch_size=1.0))
+        # This class keeps strict arm collision priority for the physical
+        # baseline.  Front/back shared-zone admission is intentionally still
+        # parallel, so a second object may be grasped inside this time window.
+        cls.demo = SortingDemo(
+            model_path,
+            seed=42,
+            parameters=DemoParameters(feed_batch_size=1.0, collision_priority="strict"),
+        )
         with redirect_stdout(StringIO()):
             while cls.demo.data.time < 20.75 and not cls.demo.paused:
                 cls.demo.step()
@@ -29,9 +36,10 @@ class SortingDemoPhysicalRegressionTests(unittest.TestCase):
         self.assertEqual((assignments[0]["arm"], assignments[0]["object_id"]), ("B", "part_01"))
         self.assertTrue(all(item.object_class.value == "middle" for item in self.demo.items))
 
-    def test_first_object_requires_bilateral_physical_contact(self):
+    def test_grasps_require_bilateral_physical_contact(self):
         grasps = [event for event in self.events if event["event"] == "grasp"]
-        self.assertEqual({event["object_id"] for event in grasps}, {"part_01"})
+        grasped_objects = {event["object_id"] for event in grasps}
+        self.assertIn("part_01", grasped_objects)
         for event in grasps:
             self.assertEqual(event["finger_count"], 2)
             self.assertEqual(event["contact"], "bilateral_finger_physical")

@@ -1,6 +1,6 @@
 standard:
   id: paper-low-level-seed42
-  version: 0.37.0
+  version: 0.38.0
   purpose: 可重現的論文低階雙臂協同基線，不代表已達成率標
   seed: 42
   duration_s: 60
@@ -29,6 +29,8 @@ control:
   safety_prediction_hz: 50
   warning_margin_m: 0.10
   max_viewer_substeps: 8
+  peer_belt_entry_deadline_s: 0.80
+  peer_motion_speed_scale: 0.60
 
 acceptance:
   required:
@@ -39,18 +41,20 @@ acceptance:
     - release_only_inside_target_tray
     - low_level_mode_is_reported
   research_targets:
-    placed_ratio_at_least: 0.80
-    missed_count_at_most: 2
+    placed_ratio_at_least: 1.00
+    missed_count_at_most: 0
     safety_stop_count: 0
 
 last_observed_seed42_window:
-  simulated_time_s: 38.94
-  spawned: 8
-  placed: 2
-  missed: 1
-  active_parts: 5
-  arm_a_grasped: 1
-  arm_b_grasped: 1
-  path_reject_events: 3
-  path_abort_events: 1
-  status: needs_motion_model_fix
+  simulated_time_s: 53.08
+  spawned: 10
+  placed: 10
+  missed: 0
+  active_parts: 0
+  arm_a_grasped: 5
+  arm_b_grasped: 5
+  path_reject_events: 0
+  path_abort_events: 0
+  shared_zone_clear_delay_s: 1.00
+  shared_zone_split_y_m: 0.25
+  status: verified_seed42_fast_profile

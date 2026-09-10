@@ -161,7 +161,11 @@ class DynamicInterceptTests(unittest.TestCase):
         self.assertEqual(evidence.rejection_reason, "unsequenced_shared_corridor_entry")
 
     def test_seed_101_places_the_initial_pair_without_a_safety_stop(self):
-        demo = SortingDemo(ROOT / "models" / "nova5" / "nova5_sorting_line.xml", seed=101)
+        demo = SortingDemo(
+            ROOT / "models" / "nova5" / "nova5_sorting_line.xml",
+            seed=101,
+            parameters=DemoParameters(collision_priority="strict"),
+        )
         with redirect_stdout(StringIO()):
             while demo.data.time < 30.0 and not demo.paused:
                 demo.step()

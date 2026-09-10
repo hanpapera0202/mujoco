@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from central_coordinator import ArmId, ObjectClass
-from run_sorting_demo import SAFETY_REGIONS, SortingDemo, make_demo_items
+from run_sorting_demo import ArmMission, SAFETY_REGIONS, SortingDemo, make_demo_items
 
 
 class NarrowMiddleScenarioTests(unittest.TestCase):
@@ -67,8 +67,57 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
     def test_robot_bases_are_closer_to_narrow_line(self):
         first = self.demo.model.body_pos[self.demo.model.body("robot_A_base").id]
         second = self.demo.model.body_pos[self.demo.model.body("robot_B_base").id]
-        np.testing.assert_allclose(first, (-0.58, -0.08, 0.0))
-        np.testing.assert_allclose(second, (0.58, -0.08, 0.0))
+        np.testing.assert_allclose(first, (-0.38, 0.15, 0.0))
+        np.testing.assert_allclose(second, (0.38, 0.15, 0.0))
+
+    def test_shared_zone_indicator_is_visual_only_and_has_cooldown(self):
+        model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
+        demo = SortingDemo(model_path, seed=42)
+        for name in ("shared_belt_front_test_zone", "shared_belt_back_test_zone"):
+            indicator = demo.model.geom(name)
+            self.assertEqual(indicator.contype[0], 0)
+            self.assertEqual(indicator.conaffinity[0], 0)
+        self.assertEqual(demo.snapshot()["shared_zone"]["indicator"], "amber")
+        demo.missions[ArmId.A] = ArmMission(
+            ArmId.A,
+            "part_01",
+            "left_bin",
+            [("track", 1.0, np.zeros(6), 0.035)],
+            0.0,
+            last_pick_xyz=np.array((0.0, 1.20, 0.16)),
+        )
+        demo._reserve_shared_zone_entry(demo.missions[ArmId.A])
+        demo._update_shared_zone_indicator()
+        self.assertEqual(demo.snapshot()["shared_zone"]["zones"]["front"]["indicator"], "red")
+        demo.missions.clear()
+        demo._update_shared_zone_indicator()
+        self.assertEqual(demo.snapshot()["shared_zone"]["zones"]["front"]["indicator"], "amber")
+        clear_since = demo.shared_zone_clear_since_s["front"]
+        demo.data.time = clear_since + 1.02
+        demo._update_shared_zone_indicator()
+        zone = demo.snapshot()["shared_zone"]
+        self.assertEqual(zone["indicator"], "green")
+        self.assertTrue(zone["zones"]["front"]["peer_entry_allowed"])
+        self.assertTrue(zone["zones"]["back"]["peer_entry_allowed"])
+        self.assertAlmostEqual(zone["cooldown_s"], 1.0)
+        self.assertAlmostEqual(zone["split_y_m"], 0.25)
+
+    def test_shared_zone_entry_is_atomic_for_same_step_peers(self):
+        model_path = ROOT / "models" / "nova5" / "nova5_sorting_line.xml"
+        demo = SortingDemo(model_path, seed=42)
+        for arm, object_id in ((ArmId.A, "part_01"), (ArmId.B, "part_02")):
+            demo.missions[arm] = ArmMission(
+                arm,
+                object_id,
+                "left_bin",
+                [("track", 1.0, np.zeros(6), 0.035)],
+                0.0,
+                last_pick_xyz=np.array((0.0, 1.20, 0.16)),
+            )
+        demo._update_shared_zone_indicator()
+        demo._reserve_shared_zone_entry(demo.missions[ArmId.A])
+        self.assertFalse(demo._shared_zone_entry_allowed(ArmId.B))
+        self.assertEqual(demo.snapshot()["shared_zone"]["zones"]["front"]["owners"], ["A"])
 
     def test_each_warning_box_expands_its_collision_box_by_10_cm(self):
         for arm in ArmId:
@@ -102,8 +151,29 @@ class NarrowMiddleScenarioTests(unittest.TestCase):
             (0.05, 0.05, 0.05),
         )
 
-    def test_home_pose_has_no_warning_envelope_overlap(self):
-        self.assertEqual(self.demo._warning_envelope_overlaps(self.demo.data), [])
+    def test_home_pose_has_no_physical_forbidden_contact(self):
+        # The stations are intentionally closer now. Their 10 cm warning
+        # envelopes may overlap at home, but the physical collision layer
+        # must remain clear before either arm enters the belt.
+        self.assertEqual(self.demo._forbidden_contacts(self.demo.data), [])
+
+    def test_progress_first_collision_priority_is_exposed_and_switchable(self):
+        self.assertEqual(self.demo.parameters.collision_priority, "progress_first")
+        self.assertEqual(
+            int(self.demo.model.geom("A_gripper_collision").conaffinity[0]) & 16,
+            0,
+        )
+        self.assertEqual(
+            int(self.demo.model.geom("B_gripper_collision").conaffinity[0]) & 8,
+            0,
+        )
+        self.demo.update_settings({"collision_priority": "strict"})
+        self.assertEqual(self.demo.parameters.collision_priority, "strict")
+        self.assertTrue(self.demo.reset_if_requested())
+        self.assertNotEqual(int(self.demo.model.geom("A_gripper_collision").conaffinity[0]) & 16, 0)
+        self.assertNotEqual(int(self.demo.model.geom("B_gripper_collision").conaffinity[0]) & 8, 0)
+        self.demo.update_settings({"collision_priority": "progress_first"})
+        self.assertEqual(self.demo.parameters.collision_priority, "progress_first")
 
 
 if __name__ == "__main__":

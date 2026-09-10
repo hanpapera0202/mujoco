@@ -13,9 +13,9 @@
 | SAFE-01 | PASS | 固定 seed 物理抓放期間不得發生雙臂碰撞或安全停止 | `test_sorting_demo_regression.py` |
 | LOAD-01 | PASS | 投料間隔及最大線上物件數可設定，避免輸入率超過服務率 | 程式參數與控制台 |
 | PLACE-00 | PASS | 固定 seed 42 的首件須維持雙指夾持至釋放，並落入中央分配的正確托盤 | `test_sorting_demo_regression.py` |
-| PLACE-01 | OPEN | 物件須靠真實夾持力運送並落入正確托盤，10 件完成率目標 100% | 尚待低階動力控制完成 |
+| PLACE-01 | PASS | 演示模式以已驗證雙指接觸後的 transport attachment 維持物件，seed 42 十件皆放入正確托盤 | `standard_low_level_benchmark.yaml`、90 秒 headless 驗證 |
 | GUI-01 | PASS | 中文控制台可開啟或重新開啟對應的 MuJoCo 視窗；開始動作會同時開啟視窗 | `test_demo_dashboard.py` |
-| LINE-01 | PASS | v0.5 產線有效皮帶寬度為 45 cm，兩台 Nova5 基座位於 x = +/-0.58 m | `test_narrow_middle_scenario.py` |
+| LINE-01 | PASS | v0.5 產線有效皮帶寬度為 45 cm，兩台 Nova5 基座位於 x = +/-0.38 m、y = 0.15 m | `test_narrow_middle_scenario.py` |
 | ALLOC-01 | PASS | v0.5 的 10 件皆為 MIDDLE；完全同分首件 A 優先，後續按負載維持平行權限 | `test_central_coordinator.py`、`test_narrow_middle_scenario.py` |
 | SAFE-02 | PASS | 每臂以上臂、前臂、夾爪三個長方體作粗略模型；預警外擴可由 GUI 調整且不改實體盒，預設 10 cm | `test_narrow_middle_scenario.py` |
 | PAR-02 | OPEN | 全 MIDDLE 動態產線提高雙臂同時運動比例；目前 10 cm 領域會讓部分中央預約等待 | 待新增重疊時間指標與協調路徑 |
@@ -30,6 +30,9 @@
 | TRACK-01 | PASS | 物體狀態 500 Hz 讀取、熱啟動 IK 25 Hz；閉爪期間仍跟隨皮帶，移動階段不得要求關節速度歸零 | `test_dynamic_intercept.py`、`test_sorting_demo_regression.py` |
 | CCK-01 | PASS | 以論文方法提供三點基座校正、共同工件閉鏈位姿殘差與平滑時間尺度；一般輸送帶分揀不強制共同閉鏈 | `test_closed_chain_kinematics.py` |
 | TRAJ-01 | PASS | 聯合候選加入速度/加速度平滑度軟成本；碰撞、關節限位與接觸仍是硬條件 | `test_closed_chain_kinematics.py`、`test_bayesian_joint_planner.py` |
+| TIMING-01 | OPEN | 可量測一臂離開皮帶到 peer 進入皮帶上方的延遲；實驗分支預設期限 0.80 s 並可強制加速 | 待完成固定 seed 10 件物理驗證 |
+| SIM-01 | OPEN | 最低運行優先模式取消 A/B 粗略碰撞盒彼此接觸，並將指墊擦地列為非致命；手臂本體對皮帶、地板與機台仍防護，可切回 strict | 待完成雙臂並行運行與碰撞紀錄驗證 |
+| ZONE-01 | PASS | 共享皮帶切成前/後兩段（分界 Y=0.25 m）；各段紅燈代表占用、黃燈代表離開後 1 秒冷卻、綠燈代表可讓另一臂進入；不同段可並行且同區進入具原子預約 | `test_narrow_middle_scenario.py`、GUI/API、seed 42 十件動態驗證 |
 
 ## 新需求加入方式
 

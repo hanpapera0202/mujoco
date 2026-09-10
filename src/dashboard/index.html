@@ -34,8 +34,16 @@
         <label>投料 X 最大值 (m)<input name="feed_x_max_m" type="number" min="-0.10" max="0.18" step="0.01" required></label>
         <label>投料 Y 最小值 (m)<input name="feed_y_min_m" type="number" min="0.90" max="1.30" step="0.01" required></label>
         <label>投料 Y 最大值 (m)<input name="feed_y_max_m" type="number" min="1.00" max="1.40" step="0.01" required></label>
+        <label>Peer 到皮帶上方期限 (s)<input name="peer_belt_entry_deadline_s" type="number" min="0.10" max="5" step="0.05" required></label>
+        <label>Peer 加速比例<input name="peer_motion_speed_scale" type="number" min="0.25" max="1" step="0.05" required></label>
         <label class="readonly-setting">最大線上物件數<span>雙臂模式不設容量上限（本場景最多 10 件）</span></label>
         <label>碰撞警戒外擴距離 (m)<input name="warning_margin_m" type="number" min="0.02" max="0.30" step="0.01" required></label>
+        <label>碰撞處理優先級
+          <select name="collision_priority" id="collision-priority">
+            <option value="progress_first">最低運行優先：互撞與指墊擦地非致命</option>
+            <option value="strict">安全優先：碰撞會阻擋路徑</option>
+          </select>
+        </label>
         <h1>演算法</h1>
         <label>協調方法
           <select name="algorithm" id="algorithm">
@@ -67,6 +75,8 @@
       <section class="panel"><h2>目前演算法</h2><div id="algorithm-name"></div><div id="joint-plan" class="rows"></div></section>
       <section class="panel"><h2>低階雙臂協同層</h2><div id="low-level" class="rows"></div></section>
       <section class="panel"><h2>低頻運行觀測</h2><div id="observation" class="rows"></div></section>
+      <section class="panel"><h2>共享皮帶區閘門</h2><div id="shared-zone" class="rows"></div></section>
+      <section class="panel"><h2>離帶後 Peer 時序</h2><div id="coordination-timing" class="rows"></div></section>
       <section class="panel"><h2>最新中央派工</h2><div id="assignments" class="rows"></div><details><summary>拒絕候選</summary><pre id="rejected"></pre></details></section>
       <section class="panel"><h2>事件紀錄</h2><ol id="events"></ol></section>
       <p class="hint">關閉 MuJoCo 後可由左側重新開啟同一場演示；MuJoCo 視窗按 <kbd>R</kbd> 也能重播。</p>

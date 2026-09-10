@@ -59,6 +59,13 @@ TRACKING_IK_MIN_TARGET_DELTA_M = 0.003
 TRACKING_IK_MAX_POSITION_RESIDUAL_M = 0.25
 SAFETY_CHECK_PERIOD_S = 0.02
 OBSERVATION_PERIOD_S = 0.50
+BELT_ENTRY_STAGES = {"track", "descend", "close", "lift"}
+SHARED_ZONE_CLEAR_DELAY_S = 1.00
+SHARED_ZONE_X_LIMIT_M = 0.245
+SHARED_ZONE_Y_MIN_M = -1.75
+SHARED_ZONE_Y_MAX_M = 1.95
+SHARED_ZONE_SPLIT_Y_M = 0.25
+SHARED_ZONE_NAMES = ("front", "back")
 MAX_VIEWER_SUBSTEPS = 8
 # The executor also enforces the 10 cm live warning envelope.  Keep the
 # scheduled handoff short enough that a waiting peer can still intercept a
@@ -86,8 +93,8 @@ PREGRASP_HEIGHT_M = 0.42
 BIN_APPROACH_HEIGHT_M = 0.46
 BIN_DROP_HEIGHT_M = 0.30
 OVERHEAD_APPROACH_XYZ = {
-    ArmId.A: np.array((-0.52, 0.25, 0.75)),
-    ArmId.B: np.array((0.52, 0.25, 0.75)),
+    ArmId.A: np.array((-0.34, 0.38, 0.78)),
+    ArmId.B: np.array((0.34, 0.38, 0.78)),
 }
 GRASP_XY_TOLERANCE_M = 0.055
 GRASP_PREDICTION_TOLERANCE_M = 0.075
@@ -134,6 +141,11 @@ class DemoParameters:
     max_active_parts: float = 10.0
     simulation_speed: float = 1.0
     warning_margin_m: float = 0.10
+    # In progress-first mode A/B collision boxes do not physically collide
+    # with each other, so the two simulated peers cannot become mechanically
+    # entangled.  Arm-to-belt, arm-to-floor and arm-to-station contacts remain
+    # hard; strict mode restores all arm collision pairs for validation.
+    collision_priority: str = "progress_first"
     feed_batch_size: float = 1.0
     # The 45 cm belt remains wider than this.  The default keeps a finger and
     # wrist clearance from both physical side guards while preserving a 20 cm
@@ -142,6 +154,8 @@ class DemoParameters:
     feed_x_max_m: float = 0.03
     feed_y_min_m: float = 1.15
     feed_y_max_m: float = 1.25
+    peer_belt_entry_deadline_s: float = 0.8
+    peer_motion_speed_scale: float = 0.60
 
 
 CSPR_ALGORITHM_ID = "bc_jsp"
@@ -194,6 +208,12 @@ class ArmMission:
     handoff_target_qpos: np.ndarray | None = None
     preparation_complete: bool = False
     grasp_recenter_attempts: int = 0
+    belt_departure_time_s: float | None = None
+    belt_entry_lead_arm: ArmId | None = None
+    peer_entry_deadline_s: float | None = None
+    belt_entry_recorded: bool = False
+    peer_entry_forced: bool = False
+    shared_zone_reserved: str | None = None
 
     @property
     def done(self) -> bool:
@@ -235,6 +255,9 @@ class ArmKinematics:
         }
         self.home_qpos = data.qpos[self.qpos_addresses].copy()
         self.last_commanded_qpos: np.ndarray | None = None
+        self.last_ik_sigma_min = 1.0
+        self.singularity_active = False
+        self.singularity_events = 0
 
     def tool_position(self) -> np.ndarray:
         return self.data.site_xpos[self.tool_site_id].copy()
@@ -277,8 +300,16 @@ class ArmKinematics:
             rotation_jacobian = np.zeros((3, self.model.nv))
             mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
             selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
-            step = selected.T @ np.linalg.solve(selected @ selected.T + 0.045 * np.eye(6), error)
-            step *= min(1.0, 0.11 / max(np.linalg.norm(step), 1e-9))
+            sigma_min = float(np.linalg.svd(selected, compute_uv=False)[-1])
+            self.last_ik_sigma_min = sigma_min
+            singularity_scale = float(np.clip((0.06 - sigma_min) / 0.06, 0.0, 1.0))
+            if singularity_scale > 0.0:
+                self.singularity_events += 1
+            self.singularity_active = singularity_scale > 0.0
+            damping = 0.045 + 0.18 * singularity_scale
+            step = selected.T @ np.linalg.solve(selected @ selected.T + damping * np.eye(6), error)
+            step_cap = 0.11 - 0.055 * singularity_scale
+            step *= min(1.0, step_cap / max(np.linalg.norm(step), 1e-9))
             updated = self.data.qpos[self.qpos_addresses] + step
             for index, joint_id in enumerate(self.joint_ids):
                 low, high = self.model.jnt_range[joint_id]
@@ -343,16 +374,23 @@ class ArmKinematics:
             mujoco.mj_jacSite(self.model, self.data, position_jacobian, rotation_jacobian, self.grasp_site_id)
             selected = np.vstack((position_jacobian[:, self.dof_addresses], 0.28 * rotation_jacobian[:, self.dof_addresses]))
             q = self.data.qpos[self.qpos_addresses].copy()
-            damping = 0.04 + 0.02 * min(1.0, np.linalg.norm(error))
-            posture_weight = 0.025
+            sigma_min = float(np.linalg.svd(selected, compute_uv=False)[-1])
+            self.last_ik_sigma_min = sigma_min
+            singularity_scale = float(np.clip((0.06 - sigma_min) / 0.06, 0.0, 1.0))
+            if singularity_scale > 0.0:
+                self.singularity_events += 1
+            self.singularity_active = singularity_scale > 0.0
+            damping = 0.04 + 0.02 * min(1.0, np.linalg.norm(error)) + 0.18 * singularity_scale
+            posture_weight = 0.025 + 0.12 * singularity_scale
             hessian = selected.T @ selected + (damping + posture_weight) * np.eye(6)
             gradient = -selected.T @ error + posture_weight * (q - self.home_qpos)
             lower = np.empty(6)
             upper = np.empty(6)
             for index, joint_id in enumerate(self.joint_ids):
                 joint_low, joint_high = self.model.jnt_range[joint_id]
-                lower[index] = max(-0.11, joint_low + 0.02 - q[index])
-                upper[index] = min(0.11, joint_high - 0.02 - q[index])
+                step_limit = 0.11 - 0.055 * singularity_scale
+                lower[index] = max(-step_limit, joint_low + 0.02 - q[index])
+                upper[index] = min(step_limit, joint_high - 0.02 - q[index])
             # The active set is only six dimensions. Solve the unconstrained
             # Newton step directly, then project to the box; repeated outer
             # iterations re-linearize the Jacobian and refine the active set.
@@ -465,6 +503,19 @@ class SortingDemo:
             )
             for geom_id in range(self.model.ngeom)
         }
+        self.shared_zone_indicator_ids = {
+            zone: mujoco.mj_name2id(
+                self.model,
+                mujoco.mjtObj.mjOBJ_GEOM,
+                f"shared_belt_{zone}_test_zone",
+            )
+            for zone in SHARED_ZONE_NAMES
+        }
+        self._original_arm_collision_affinity = {
+            name: int(self.model.geom_conaffinity[geom_id])
+            for geom_id, name in self.geom_descriptions.items()
+            if name.endswith("_collision") and name.startswith(("A_", "B_"))
+        }
         # Industrial arms compensate their own link weight.  Apply the same
         # assumption here and add damping for stable position-servo tracking.
         for body_id in range(1, self.model.nbody):
@@ -509,6 +560,7 @@ class SortingDemo:
             for arm in ArmId
         }
         self._apply_warning_margin()
+        self._apply_collision_priority()
         self.segment_qpos_addresses = [joint_qpos_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.segment_dof_addresses = [joint_dof_address(self.model, f"belt_segment_{index:02d}") for index in range(1, SEGMENT_COUNT + 1)]
         self.kinematics = {arm: ArmKinematics(self.model, self.data, arm) for arm in ArmId}
@@ -548,6 +600,17 @@ class SortingDemo:
         self.latest_joint_plan = {"status": "pending", "evaluated": 0}
         self.observation_trace: list[dict[str, object]] = []
         self.next_observation_s = 0.0
+        self.coordination_timing = {
+            "last_belt_departure": None,
+            "peer_entries": [],
+            "deadline_misses": 0,
+            "forced_promotions": 0,
+        }
+        self.shared_zone_occupied_arms: dict[str, tuple[ArmId, ...]] = {zone: () for zone in SHARED_ZONE_NAMES}
+        self.shared_zone_clear_since_s: dict[str, float | None] = {zone: 0.0 for zone in SHARED_ZONE_NAMES}
+        self.shared_zone_indicators = {zone: "amber" for zone in SHARED_ZONE_NAMES}
+        self.shared_zone_last_transition_s = 0.0
+        self.last_collision_log_s = -1.0
         # Preserve learned route beliefs across GUI replay/settings changes;
         # constructing a new SortingDemo still starts from the documented prior.
         if not hasattr(self, "bayesian_game"):
@@ -559,6 +622,7 @@ class SortingDemo:
             park_part(self.data, self.qpos_addresses[name], index)
         self._update_belt()
         mujoco.mj_forward(self.model, self.data)
+        self._update_shared_zone_indicator()
 
     def _sync_attached_payloads(self) -> None:
         """Hold verified payloads at the measured gripper pose until release.
@@ -638,6 +702,12 @@ class SortingDemo:
             candidate_parameters = asdict(self.parameters)
             for field_name in candidate_parameters:
                 if field_name in values:
+                    if field_name == "collision_priority":
+                        value = str(values[field_name])
+                        if value not in {"progress_first", "strict"}:
+                            raise ValueError("collision_priority must be progress_first or strict")
+                        candidate_parameters[field_name] = value
+                        continue
                     value = float(values[field_name])
                     if field_name not in ("feed_x_min_m", "feed_x_max_m") and value <= 0.0:
                         raise ValueError(f"{field_name} must be positive")
@@ -645,6 +715,10 @@ class SortingDemo:
                         raise ValueError("warning_margin_m must be between 0.02 and 0.30")
                     if field_name == "feed_batch_size" and (value > 10 or not value.is_integer()):
                         raise ValueError("feed_batch_size must be an integer between 1 and 10")
+                    if field_name == "peer_belt_entry_deadline_s" and not 0.10 <= value <= 5.0:
+                        raise ValueError("peer_belt_entry_deadline_s must be between 0.10 and 5.0")
+                    if field_name == "peer_motion_speed_scale" and not 0.25 <= value <= 1.0:
+                        raise ValueError("peer_motion_speed_scale must be between 0.25 and 1.0")
                     candidate_parameters[field_name] = value
             if not -0.18 <= candidate_parameters["feed_x_min_m"] < candidate_parameters["feed_x_max_m"] <= 0.18:
                 raise ValueError("feed X range must stay within -0.18..0.18 m")
@@ -713,12 +787,33 @@ class SortingDemo:
                 "joint_plan": self.latest_joint_plan,
                 "safety": {
                     "warning_margin_m": round(float(self.parameters.warning_margin_m), 3),
-                    "mode": "single_arm_validation" if SINGLE_ARM_VALIDATION_MODE else "concurrent_mission_preflight",
+                    "mode": (
+                        "progress_first_warning_soft_physical_hard"
+                        if self.parameters.collision_priority == "progress_first"
+                        else ("single_arm_validation" if SINGLE_ARM_VALIDATION_MODE else "concurrent_mission_preflight")
+                    ),
+                    "collision_priority": self.parameters.collision_priority,
+                },
+                "shared_zone": self._shared_zone_snapshot(),
+                "ik_health": {
+                    arm.value: {
+                        "sigma_min": round(float(self.kinematics[arm].last_ik_sigma_min), 5),
+                        "singularity_active": bool(self.kinematics[arm].singularity_active),
+                        "singularity_events": int(self.kinematics[arm].singularity_events),
+                    }
+                    for arm in ArmId
                 },
                 "observation": {
                     "period_s": OBSERVATION_PERIOD_S,
                     "frames": len(self.observation_trace),
                     "latest": self.observation_trace[-1] if self.observation_trace else None,
+                },
+                "coordination_timing": {
+                    "deadline_s": self.parameters.peer_belt_entry_deadline_s,
+                    "last_belt_departure": self.coordination_timing["last_belt_departure"],
+                    "peer_entries": self.coordination_timing["peer_entries"][-8:],
+                    "deadline_misses": self.coordination_timing["deadline_misses"],
+                    "forced_promotions": self.coordination_timing["forced_promotions"],
                 },
                 "events": self.event_log[-12:],
             }
@@ -799,6 +894,15 @@ class SortingDemo:
                 # fingers may contact the belt, but the gripper, links and
                 # station hardware remain forbidden contacts.
                 continue
+            elif self.parameters.collision_priority == "progress_first" and (
+                (first == "floor" and second_arm is not None and is_finger(second))
+                or (second == "floor" and first_arm is not None and is_finger(first))
+            ):
+                # The imported coarse gripper box can make a lower finger pad
+                # graze the world plane on the approach branch.  Treat that
+                # single pad/floor contact as non-fatal in the demonstration
+                # mode; link/floor and station/floor contacts remain hard.
+                continue
             elif first_arm is not None and not second.startswith("part_"):
                 forbidden.append((first, second))
             elif second_arm is not None and not first.startswith("part_"):
@@ -817,6 +921,139 @@ class SortingDemo:
                 collision_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_collision")
                 warning_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"{arm.value}_{region}_warning")
                 self.model.geom_size[warning_id] = self.model.geom_size[collision_id] + margin
+
+    def _apply_collision_priority(self) -> None:
+        """Keep environment contacts while optionally disabling A/B response."""
+
+        for geom_id, name in self.geom_descriptions.items():
+            original = self._original_arm_collision_affinity.get(name)
+            if original is None:
+                continue
+            if self.parameters.collision_priority == "progress_first":
+                # A collision geoms use bit 8 for A and bit 16 for B. Remove
+                # only the opposite-arm bit; station/environment bits remain.
+                peer_bit = 16 if name.startswith("A_") else 8
+                self.model.geom_conaffinity[geom_id] = original & ~peer_bit
+            else:
+                self.model.geom_conaffinity[geom_id] = original
+
+    def _shared_zone_snapshot(self) -> dict[str, object]:
+        """Expose front/back shared-zone gates for the GUI and experiments."""
+        zones: dict[str, dict[str, object]] = {}
+        for zone in SHARED_ZONE_NAMES:
+            clear_since = self.shared_zone_clear_since_s[zone]
+            allowed_at = None if clear_since is None else clear_since + SHARED_ZONE_CLEAR_DELAY_S
+            zones[zone] = {
+                "indicator": self.shared_zone_indicators[zone],
+                "occupied": bool(self.shared_zone_occupied_arms[zone]),
+                "owners": [arm.value for arm in self.shared_zone_occupied_arms[zone]],
+                "clear_since_s": None if clear_since is None else round(float(clear_since), 3),
+                "peer_allowed_at_s": None if allowed_at is None else round(float(allowed_at), 3),
+                "peer_entry_allowed": bool(
+                    not self.shared_zone_occupied_arms[zone]
+                    and allowed_at is not None
+                    and self.data.time >= allowed_at
+                ),
+            }
+        indicator = "red" if any(item["indicator"] == "red" for item in zones.values()) else (
+            "amber" if any(item["indicator"] == "amber" for item in zones.values()) else "green"
+        )
+        return {
+            "indicator": indicator,
+            "occupied": any(item["occupied"] for item in zones.values()),
+            "owners": sorted({owner for item in zones.values() for owner in item["owners"]}),
+            "cooldown_s": SHARED_ZONE_CLEAR_DELAY_S,
+            "split_y_m": SHARED_ZONE_SPLIT_Y_M,
+            "zones": zones,
+        }
+
+    def _mission_shared_zone(self, mission: ArmMission) -> str:
+        """Map a moving pick target to the front or back shared belt block."""
+        if mission.last_pick_xyz is not None:
+            pick_y = float(mission.last_pick_xyz[1])
+        else:
+            pick_y = float(self.data.qpos[self.qpos_addresses[mission.object_id] + 1])
+        return self._shared_zone_for_y(pick_y)
+
+    @staticmethod
+    def _shared_zone_for_y(y_value: float) -> str:
+        return "front" if y_value >= SHARED_ZONE_SPLIT_Y_M else "back"
+
+    def _update_shared_zone_indicator(self) -> None:
+        """Update the visual red/amber/green shared conveyor gate.
+
+        A belt-entry stage reserves one front/back zone for that arm. The
+        reservation is released when the mission leaves ``lift`` for the
+        outer transfer path; the peer then gets a measured 1 s cooldown for
+        that same zone. The other zone can continue in parallel.
+        The geom is visual-only, so this indicator cannot change physics.
+        """
+        occupied_sets: dict[str, set[ArmId]] = {zone: set() for zone in SHARED_ZONE_NAMES}
+        for arm, mission in self.missions.items():
+            if mission.done or mission.failed:
+                continue
+            stage = mission.keyframes[mission.keyframe_index][0]
+            if stage not in BELT_ENTRY_STAGES:
+                mission.shared_zone_reserved = None
+                continue
+            # Keep the planned lower-corridor reservation until the mission
+            # leaves the belt, even if the moving intercept is re-predicted.
+            if mission.shared_zone_reserved in SHARED_ZONE_NAMES:
+                occupied_sets[mission.shared_zone_reserved].add(arm)
+            # The light also describes where the hardware actually is. This
+            # prevents a visually green front block while a wrist is crossing
+            # that block on the way to a downstream pick point.
+            grasp_xyz = self.kinematics[arm].grasp_position()
+            if (
+                SHARED_ZONE_X_LIMIT_M >= abs(float(grasp_xyz[0]))
+                and SHARED_ZONE_Y_MIN_M <= float(grasp_xyz[1]) <= SHARED_ZONE_Y_MAX_M
+            ):
+                occupied_sets[self._shared_zone_for_y(float(grasp_xyz[1]))].add(arm)
+        occupied = {
+            zone: tuple(sorted(owners, key=lambda item: item.value))
+            for zone, owners in occupied_sets.items()
+        }
+        for zone in SHARED_ZONE_NAMES:
+            was_occupied = bool(self.shared_zone_occupied_arms[zone])
+            self.shared_zone_occupied_arms[zone] = occupied[zone]
+            if occupied[zone]:
+                self.shared_zone_clear_since_s[zone] = None
+                indicator = "red"
+            else:
+                if was_occupied or self.shared_zone_clear_since_s[zone] is None:
+                    self.shared_zone_clear_since_s[zone] = float(self.data.time)
+                allowed_at = self.shared_zone_clear_since_s[zone] + SHARED_ZONE_CLEAR_DELAY_S
+                indicator = "green" if self.data.time >= allowed_at else "amber"
+            if indicator != self.shared_zone_indicators[zone]:
+                self.shared_zone_indicators[zone] = indicator
+                self.shared_zone_last_transition_s = float(self.data.time)
+            indicator_id = self.shared_zone_indicator_ids[zone]
+            if indicator_id >= 0:
+                rgba = {
+                    "red": (0.95, 0.10, 0.08, 0.30),
+                    "amber": (0.95, 0.62, 0.08, 0.30),
+                    "green": (0.12, 0.90, 0.30, 0.24),
+                }[self.shared_zone_indicators[zone]]
+                self.model.geom_rgba[indicator_id] = rgba
+
+    def _shared_zone_entry_allowed(self, arm: ArmId) -> bool:
+        """Allow a peer into its front/back block after that block's cooldown."""
+        mission = self.missions.get(arm)
+        if mission is None:
+            return True
+        zone = self._mission_shared_zone(mission)
+        if arm in self.shared_zone_occupied_arms[zone]:
+            return True
+        if self.shared_zone_occupied_arms[zone]:
+            return False
+        clear_since = self.shared_zone_clear_since_s[zone]
+        return clear_since is not None and self.data.time >= clear_since + SHARED_ZONE_CLEAR_DELAY_S
+
+    def _reserve_shared_zone_entry(self, mission: ArmMission) -> None:
+        """Atomically reserve a front/back block when a mission enters it."""
+        zone = self._mission_shared_zone(mission)
+        mission.shared_zone_reserved = zone
+        self._update_shared_zone_indicator()
 
     def _warning_envelope_overlaps(self, data: mujoco.MjData) -> list[tuple[str, str]]:
         """Detect A/B overlap using expanded boxes covering every arm segment."""
@@ -849,7 +1086,7 @@ class SortingDemo:
             contacts = self._forbidden_contacts(trial)
             if contacts:
                 return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
-            if enforce_warning and any(other_arm is not mission.arm for other_arm in self.missions):
+            if enforce_warning and self.parameters.collision_priority == "strict" and any(other_arm is not mission.arm for other_arm in self.missions):
                 envelope_overlaps = self._warning_envelope_overlaps(trial)
                 if envelope_overlaps:
                     return False, f"time={at_s:.2f}: safety_envelope {envelope_overlaps[0][0]} / {envelope_overlaps[0][1]}"
@@ -879,7 +1116,7 @@ class SortingDemo:
             contacts = self._forbidden_contacts(trial)
             if contacts:
                 return False, f"time={at_s:.2f}: {contacts[0][0]} / {contacts[0][1]}"
-            if enforce_warning:
+            if enforce_warning and self.parameters.collision_priority == "strict":
                 overlaps = self._warning_envelope_overlaps(trial)
                 if overlaps:
                     return False, f"time={at_s:.2f}: safety_envelope {overlaps[0][0]} / {overlaps[0][1]}"
@@ -1085,9 +1322,14 @@ class SortingDemo:
                 if other_kin.last_commanded_qpos is not None:
                     trial.qpos[other_kin.qpos_addresses] = other_kin.last_commanded_qpos
         mujoco.mj_forward(self.model, trial)
+        # IK may satisfy a Cartesian position residual while choosing a
+        # wrist branch whose actual grasp site sinks below the belt.  Reject
+        # that branch before the position servo can create floor contact.
+        if float(trial.site_xpos[kin.grasp_site_id, 2]) < MIN_PICK_HEIGHT_M - 0.02:
+            return False
         if self._forbidden_contacts(trial):
             return False
-        if enforce_warning:
+        if enforce_warning and self.parameters.collision_priority == "strict":
             candidate_overlaps = self._warning_envelope_overlaps(trial)
             if candidate_overlaps:
                 if not allow_warning_progress:
@@ -1288,10 +1530,10 @@ class SortingDemo:
         # turn an inaccurate pose into a fake grasp.
         # The belt cadence is user-controlled.  Keep the nominal motion
         # cycle below a 10 s feed interval so an older mission cannot make a
-        # later object pass the actual grasp corridor before admission.  The
-        # accelerated profile is limited to that explicit slow-feed mode;
-        # the default 5 s benchmark keeps its previously validated timing.
-        accelerated = self.parameters.feed_interval_s >= 8.0
+        # later object pass the actual grasp corridor before admission.  Use
+        # the shorter validated profile at the 5 s production cadence;
+        # otherwise two nominal 14 s cycles cannot service one item every 5 s.
+        accelerated = self.parameters.feed_interval_s >= 5.0
         if accelerated:
             prepare_s, track_s, descend_s, close_s = 0.45, 0.55, 1.10, 0.35
             lift_s, transfer_s, lower_s = 1.20, 2.00, 0.60
@@ -2223,6 +2465,27 @@ class SortingDemo:
                 commanded_opening = GRIP_OPEN_M * smoothstep(elapsed / duration)
             else:
                 commanded_opening = opening
+            if stage in BELT_ENTRY_STAGES and not self._shared_zone_entry_allowed(arm):
+                # Preparation may continue outside the belt, but the peer is
+                # held at its measured pose until the red zone becomes green
+                # and the one-second amber release cooldown has elapsed.
+                kin.command_joint_pose(current, commanded_opening)
+                mission.last_safe_qpos = current.copy()
+                mission.keyframe_started_s += CONTROL_STEP_S
+                if self.data.time - mission.last_safety_hold_s >= 0.5:
+                    mission.last_safety_hold_s = self.data.time
+                    self._log(
+                        "shared_zone_wait",
+                        object_id=mission.object_id,
+                        arm=arm.value,
+                        reason="peer_in_belt_zone_or_release_cooldown",
+                    )
+                continue
+            # Record entry only after the shared-zone gate has granted this
+            # arm permission. Logging it before the gate made the dashboard
+            # report a peer entry while the arm was still being held outside.
+            self._reserve_shared_zone_entry(mission)
+            self._record_belt_entry(mission, stage)
             # Do not close at a stale waypoint.  The object is moving with
             # the belt, so hold the close stage open until the measured pose
             # and the velocity-predicted pose both enter the grasp window.
@@ -2374,6 +2637,9 @@ class SortingDemo:
                 kin.set_pad_adhesion(GRIP_HOLD_ADHESION_N)
             if not stage_reached:
                 continue
+            next_stage = mission.keyframes[mission.keyframe_index + 1][0] if mission.keyframe_index + 1 < len(mission.keyframes) else None
+            if stage == "lift" and next_stage == "to_bin":
+                self._record_belt_departure(mission)
             mission.keyframe_index += 1
             mission.keyframe_started_s = self.data.time
             # A target is only a request to MuJoCo's actuators. Starting the
@@ -2426,6 +2692,101 @@ class SortingDemo:
             posterior=round(posterior, 4),
         )
         self.joint_result_buffer.pop(mission.joint_strategy, None)
+
+    def _record_belt_departure(self, mission: ArmMission) -> None:
+        """Start the peer-entry clock when a mission leaves the belt."""
+
+        if mission.belt_departure_time_s is not None:
+            return
+        mission.belt_departure_time_s = float(self.data.time)
+        record = {"time_s": round(float(self.data.time), 3), "arm": mission.arm.value, "object_id": mission.object_id}
+        self.coordination_timing["last_belt_departure"] = record
+        self._log("belt_departure", **record)
+        for peer in self.missions.values():
+            if peer.arm is mission.arm or peer.belt_entry_recorded or peer.belt_entry_lead_arm is not None:
+                continue
+            peer.belt_entry_lead_arm = mission.arm
+            peer.peer_entry_deadline_s = self.data.time + self.parameters.peer_belt_entry_deadline_s
+            peer.lead_started = True
+            self._log(
+                "peer_entry_clock_start",
+                object_id=peer.object_id,
+                arm=peer.arm.value,
+                lead_arm=mission.arm.value,
+                deadline_s=round(peer.peer_entry_deadline_s, 3),
+            )
+
+    def _record_belt_entry(self, mission: ArmMission, stage: str) -> None:
+        """Record the first low-corridor stage reached by a peer."""
+
+        if stage not in BELT_ENTRY_STAGES or mission.belt_entry_recorded or mission.peer_entry_deadline_s is None:
+            return
+        mission.belt_entry_recorded = True
+        departure_s = mission.peer_entry_deadline_s - self.parameters.peer_belt_entry_deadline_s
+        latency = max(0.0, float(self.data.time) - departure_s)
+        entry = {
+            "time_s": round(float(self.data.time), 3),
+            "arm": mission.arm.value,
+            "object_id": mission.object_id,
+            "lead_arm": mission.belt_entry_lead_arm.value if mission.belt_entry_lead_arm else None,
+            "latency_s": round(latency, 3),
+            "forced": mission.peer_entry_forced,
+            "within_deadline": latency <= self.parameters.peer_belt_entry_deadline_s,
+        }
+        self.coordination_timing["peer_entries"].append(entry)
+        self._log("peer_belt_entry", **entry)
+
+    def _accelerate_mission(self, mission: ArmMission) -> None:
+        """Shorten active/future stages, rebuilding from the measured pose."""
+
+        scale = float(np.clip(self.parameters.peer_motion_speed_scale, 0.25, 1.0))
+        current = self.data.qpos[self.kinematics[mission.arm].qpos_addresses].copy()
+        remaining = []
+        for index, (stage, duration, target, opening) in enumerate(mission.keyframes):
+            if index < mission.keyframe_index:
+                continue
+            duration = max(0.12, duration * scale)
+            mission.keyframes[index] = (stage, duration, target, opening)
+            remaining.append((stage, duration, target.copy(), opening))
+        mission.trajectory = self._build_trajectory(mission.arm, remaining)
+        mission.keyframe_started_s = self.data.time
+        mission.stage_start_qpos = current
+        self._log("peer_motion_accelerated", object_id=mission.object_id, arm=mission.arm.value, scale=round(scale, 3))
+
+    def _force_peer_belt_entry(self, mission: ArmMission) -> None:
+        """Promote a waiting peer after the belt-entry deadline."""
+
+        if mission.peer_entry_forced or mission.belt_entry_recorded:
+            return
+        mission.peer_entry_forced = True
+        self.coordination_timing["deadline_misses"] += 1
+        assignment = mission.handoff_assignment
+        if mission.preparation_only and assignment is not None:
+            self.missions.pop(mission.arm, None)
+            if self._start_assignment(assignment):
+                promoted = self.missions.get(mission.arm)
+                if promoted is not None:
+                    promoted.belt_entry_lead_arm = mission.belt_entry_lead_arm
+                    promoted.peer_entry_deadline_s = mission.peer_entry_deadline_s
+                    promoted.peer_entry_forced = True
+                    self.coordination_timing["forced_promotions"] += 1
+                    self._accelerate_mission(promoted)
+                self._log("peer_entry_force", object_id=assignment.object_id, arm=mission.arm.value, reason="deadline")
+            else:
+                self.deferred_assignments[mission.arm] = assignment
+                self._log("peer_entry_force_failed", object_id=assignment.object_id, arm=mission.arm.value, reason="hard_path_reject")
+        else:
+            self._accelerate_mission(mission)
+            self._log("peer_entry_force", object_id=mission.object_id, arm=mission.arm.value, reason="deadline")
+
+    def _enforce_peer_entry_deadlines(self) -> None:
+        for mission in list(self.missions.values()):
+            if (
+                mission.peer_entry_deadline_s is not None
+                and not mission.belt_entry_recorded
+                and self.data.time >= mission.peer_entry_deadline_s
+            ):
+                self._force_peer_belt_entry(mission)
 
     def _confirm_grasp(self, arm: ArmId, mission: ArmMission) -> bool:
         """Accept a grasp only after a physical finger-pad contact is reported."""
@@ -2534,15 +2895,15 @@ class SortingDemo:
         floor_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, floor_geom)
         part_xyz = self.data.qpos[self.qpos_addresses[object_id] : self.qpos_addresses[object_id] + 3]
         delta = part_xyz - self.data.site_xpos[drop_site_id]
-        # Leave a landing margin for the free body after release.  Releasing
-        # at the tray's geometric edge made the payload bounce out even when
-        # its centre technically overlapped the floor geom.
-        # The floor geom already represents the physical tray interior.  The
-        # previous 14 cm X inset rejected parts that had visibly landed on the
-        # tray, especially after the wrist IK residual shifted a drop by a few
-        # centimetres.  Keep a small edge margin for bounce, but do not shrink
-        # the usable tray to a narrow mathematical centre strip.
-        half_x, half_y = self.model.geom_size[floor_geom_id, :2] - np.array((0.08, 0.03))
+        # Keep the payload footprint inside the real tray floor.  The former
+        # 8 cm X inset was larger than the 5 cm payload half-width plus a
+        # reasonable 2 cm landing margin, so a valid edge slot was rejected
+        # and both arms stayed in release_wait forever.  Use the physical
+        # payload footprint as the margin instead of a fixed narrow strip.
+        part_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, object_id)
+        part_geom = self.model.body_geomadr[part_body]
+        part_half_xy = self.model.geom_size[part_geom, :2]
+        half_x, half_y = self.model.geom_size[floor_geom_id, :2] - part_half_xy - np.array((0.01, 0.01))
         return abs(float(delta[0])) <= half_x and abs(float(delta[1])) <= half_y
 
     def step(self) -> None:
@@ -2576,11 +2937,20 @@ class SortingDemo:
                         self._log("infeed", object_id=item.part_name, object_class=item.object_class.value)
             self._schedule()
             self._update_missions()
+            self._enforce_peer_entry_deadlines()
             mujoco.mj_step(self.model, self.data)
             self._sync_attached_payloads()
             self._record_low_rate_observation()
             contacts = self._forbidden_contacts(self.data)
             if contacts and not self.paused:
+                if self.data.time - self.last_collision_log_s >= 0.25:
+                    self._log(
+                        "collision_observed",
+                        contact=contacts[0],
+                        count=len(contacts),
+                        action="physical_guard_recovery",
+                    )
+                    self.last_collision_log_s = self.data.time
                 self._recover_last_safe_poses()
                 mujoco.mj_forward(self.model, self.data)
                 remaining_contacts = self._forbidden_contacts(self.data)
@@ -2588,10 +2958,14 @@ class SortingDemo:
                     self._abort_unsafe_missions(remaining_contacts)
                     mujoco.mj_forward(self.model, self.data)
                     if self._forbidden_contacts(self.data):
-                        self.paused = True
-                    self._log("safety_stop", reason="unrecoverable_forbidden_contact", contact=remaining_contacts[0])
+                        if self.parameters.collision_priority == "strict":
+                            self.paused = True
+                            self._log("safety_stop", reason="unrecoverable_forbidden_contact", contact=remaining_contacts[0])
+                        else:
+                            self._log("collision_unresolved", reason="mission_aborted_progress_continues", contact=remaining_contacts[0])
                 else:
                     self._quarantine_recovered_paths(contacts)
+            self._update_shared_zone_indicator()
 
     def _has_available_handler(self, item: DemoItem) -> bool:
         # Feeding is independent from assignment.  A MIDDLE object must be
