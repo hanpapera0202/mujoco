@@ -1,11 +1,33 @@
-# MuJoCo Starter Project
+# MuJoCo Nova5 Spatiotemporal Planning Project
 
-這是一個適用於 Windows 與 MuJoCo 3.11.0 的入門專案，包含：
+本專案以 MuJoCo 為數位孿生平台，逐步建立雙 DOBOT Nova5 的三維時空 voxel 運動規劃系統，並以後續可擴展至多機械臂為設計方向。
+
+目前研究主線：
+
+```text
+Task
+→ Multiple Motion Candidates
+→ Kinematic Filtering
+→ Trajectory Generation
+→ Future Spatiotemporal Occupancy
+→ Collision Filtering
+→ Best Safe Motion
+```
+
+共享工作區使用 `5 × 5 × 5 = 125` 個 voxel，後續會把每條候選 trajectory 轉換成 future occupancy，依「相同空間 + 重疊時間」判定 Spatiotemporal Conflict。
+
+完整術語定義、演算法架構與開發階段請見：
+
+- [`docs/spatiotemporal_voxel_planning.md`](docs/spatiotemporal_voxel_planning.md)
+
+## 目前環境
+
+這是一個適用於 Windows 與 MuJoCo 3.11.0 的專案，包含：
 
 - 可直接載入的 MJCF 場景
 - Python 控制範例
 - Windows 一鍵啟動腳本
-- 基本安裝與執行說明
+- MuJoCo / Nova5 時空規劃研究文件
 
 ## 1. 下載專案
 
@@ -57,17 +79,17 @@ python src\run_simulation.py
 
 ```text
 mujoco/
+├─ docs/
+│  └─ spatiotemporal_voxel_planning.md
 ├─ models/
-│  └─ falling_box.xml
 ├─ src/
-│  └─ run_simulation.py
 ├─ .gitignore
 ├─ requirements.txt
 ├─ run_windows.bat
 └─ README.md
 ```
 
-## 5. 操作方式
+## 5. MuJoCo 操作方式
 
 模型載入後：
 
@@ -75,5 +97,3 @@ mujoco/
 - 滑鼠左鍵拖曳：旋轉視角
 - 滑鼠右鍵拖曳：平移視角
 - 滾輪：縮放
-
-場景包含一個地面與一個可自由落下的紅色方塊，可作為後續雙臂機器人、工料搬運與碰撞測試的基礎。
